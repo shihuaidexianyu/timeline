@@ -2,7 +2,14 @@
 
 import { startTransition, useEffect, useMemo, useState } from 'react'
 import './App.css'
-import { API_BASE_URL, getTimeline, type TimelineDayResponse } from './api'
+import {
+  API_BASE_URL,
+  getAgentSettings,
+  getTimeline,
+  updateAutostart,
+  type AgentSettingsResponse,
+  type TimelineDayResponse,
+} from './api'
 import { DonutChart } from './components/donut-chart'
 import { TimelineChart } from './components/timeline-chart'
 import {
@@ -29,8 +36,11 @@ function App() {
   const [page, setPage] = useHashPage()
   const [selectedDate, setSelectedDate] = useState(() => todayString())
   const [timeline, setTimeline] = useState<TimelineDayResponse | null>(null)
+  const [agentSettings, setAgentSettings] = useState<AgentSettingsResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [settingsError, setSettingsError] = useState<string | null>(null)
+  const [savingAutostart, setSavingAutostart] = useState(false)
   const [activeOnly, setActiveOnly] = useState(false)
   const [refreshToken, setRefreshToken] = useState(0)
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null)
@@ -48,12 +58,17 @@ function App() {
       setError(null)
 
       try {
-        const nextTimeline = await getTimeline(selectedDate)
+        const [nextTimeline, nextSettings] = await Promise.all([
+          getTimeline(selectedDate),
+          getAgentSettings(),
+        ])
         if (cancelled) {
           return
         }
 
         setTimeline(nextTimeline)
+        setAgentSettings(nextSettings)
+        setSettingsError(null)
         setLastUpdatedAt(new Date().toLocaleTimeString())
       } catch (loadError) {
         if (cancelled) {
@@ -253,11 +268,38 @@ function App() {
 
             {page === 'settings' ? (
               <SettingsPage
+                agentSettings={agentSettings}
                 error={error}
+                settingsError={settingsError}
                 lastUpdatedAt={lastUpdatedAt}
                 selectedDate={selectedDate}
                 timezone={timeline?.timezone ?? '--'}
                 activeOnly={activeOnly}
+                savingAutostart={savingAutostart}
+                onToggleAutostart={async (enabled) => {
+                  setSavingAutostart(true)
+                  setSettingsError(null)
+
+                  try {
+                    const result = await updateAutostart({ enabled })
+                    setAgentSettings((current) =>
+                      current
+                        ? {
+                            ...current,
+                            autostart_enabled: result.autostart_enabled,
+                          }
+                        : current,
+                    )
+                  } catch (toggleError) {
+                    const message =
+                      toggleError instanceof Error
+                        ? toggleError.message
+                        : '更新开机自启动设置失败'
+                    setSettingsError(message)
+                  } finally {
+                    setSavingAutostart(false)
+                  }
+                }}
               />
             ) : null}
           </>
@@ -503,11 +545,15 @@ function TimelinePage(props: {
 }
 
 function SettingsPage(props: {
+  agentSettings: AgentSettingsResponse | null
   error: string | null
+  settingsError: string | null
   lastUpdatedAt: string | null
   selectedDate: string
   timezone: string
   activeOnly: boolean
+  savingAutostart: boolean
+  onToggleAutostart: (enabled: boolean) => Promise<void>
 }) {
   return (
     <section className="page-stack settings-grid">
@@ -520,6 +566,10 @@ function SettingsPage(props: {
             <dd>{API_BASE_URL}</dd>
           </div>
           <div>
+            <dt>Web UI</dt>
+            <dd>{props.agentSettings?.web_ui_url ?? '--'}</dd>
+          </div>
+          <div>
             <dt>连接状态</dt>
             <dd>{props.error ? 'offline' : 'online'}</dd>
           </div>
@@ -527,32 +577,59 @@ function SettingsPage(props: {
             <dt>最后更新</dt>
             <dd>{props.lastUpdatedAt ?? 'waiting'}</dd>
           </div>
-        </dl>
-      </div>
-
-      <div className="panel settings-card">
-        <p className="section-kicker">Capture</p>
-        <h2>采集范围</h2>
-        <dl className="settings-list">
           <div>
-            <dt>窗口追踪</dt>
-            <dd>只记录前台应用窗口</dd>
-          </div>
-          <div>
-            <dt>浏览器追踪</dt>
-            <dd>只记录聚焦浏览器窗口的活动标签页</dd>
-          </div>
-          <div>
-            <dt>Presence</dt>
-            <dd>active / idle / locked</dd>
+            <dt>启动命令</dt>
+            <dd>{props.agentSettings?.launch_command ?? '--'}</dd>
           </div>
         </dl>
       </div>
 
       <div className="panel settings-card">
-        <p className="section-kicker">Session</p>
-        <h2>当前视图</h2>
+        <p className="section-kicker">Monitors</p>
+        <h2>监视器状态</h2>
+        <div className="monitor-list">
+          {props.agentSettings?.monitors.map((monitor) => (
+            <article key={monitor.key} className="monitor-card">
+              <div className="monitor-head">
+                <strong>{monitor.label}</strong>
+                <span className={`monitor-badge is-${monitor.status}`}>{monitor.status}</span>
+              </div>
+              <p>{monitor.detail}</p>
+              <small>
+                {monitor.last_seen ? `last seen ${new Date(monitor.last_seen).toLocaleTimeString()}` : 'waiting for first heartbeat'}
+              </small>
+            </article>
+          )) ?? <div className="empty-card">正在读取监视器状态…</div>}
+        </div>
+      </div>
+
+      <div className="panel settings-card">
+        <p className="section-kicker">Startup</p>
+        <h2>启动与当前视图</h2>
         <dl className="settings-list">
+          <div>
+            <dt>开机自启动</dt>
+            <dd>
+              <button
+                type="button"
+                className={`toggle-button ${props.agentSettings?.autostart_enabled ? 'is-active' : ''}`}
+                disabled={props.savingAutostart}
+                onClick={() => {
+                  void props.onToggleAutostart(!(props.agentSettings?.autostart_enabled ?? false))
+                }}
+              >
+                {props.savingAutostart
+                  ? 'Saving...'
+                  : props.agentSettings?.autostart_enabled
+                    ? 'Enabled'
+                    : 'Disabled'}
+              </button>
+            </dd>
+          </div>
+          <div>
+            <dt>托盘菜单</dt>
+            <dd>{props.agentSettings?.tray_enabled ? 'enabled' : 'disabled'}</dd>
+          </div>
           <div>
             <dt>日期</dt>
             <dd>{props.selectedDate}</dd>
@@ -566,6 +643,8 @@ function SettingsPage(props: {
             <dd>{props.activeOnly ? 'enabled' : 'disabled'}</dd>
           </div>
         </dl>
+
+        {props.settingsError ? <div className="settings-error">{props.settingsError}</div> : null}
       </div>
     </section>
   )

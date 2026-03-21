@@ -3,9 +3,11 @@
 database_path = "data/timeline.sqlite"
 lockfile_path = "data/timeline-agent.lock"
 listen_addr = "127.0.0.1:46215"
+web_ui_url = "http://127.0.0.1:4173/#/stats"
 idle_threshold_secs = 300
 poll_interval_millis = 1000
 debug = true
+tray_enabled = true
 record_window_titles = true
 record_page_titles = true
 

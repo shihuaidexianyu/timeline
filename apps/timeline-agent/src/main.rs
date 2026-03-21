@@ -4,6 +4,7 @@ mod config;
 mod db;
 mod http;
 mod state;
+mod system;
 mod trackers;
 mod windows;
 
@@ -23,7 +24,7 @@ use tracing_subscriber::EnvFilter;
 #[tokio::main]
 async fn main() -> Result<()> {
     let config_path = parse_config_path();
-    let config = AppConfig::load(config_path)?;
+    let config = AppConfig::load(config_path.clone())?;
     init_tracing(config.debug);
 
     let timezone = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
@@ -31,9 +32,20 @@ async fn main() -> Result<()> {
     let _lock = acquire_instance_lock(&config.lockfile_path)?;
     let store = AgentStore::connect(&config).await?;
     store.restore_unclosed_segments(started_at).await?;
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
-    let state = AgentState::new(config.clone(), store, started_at, timezone);
+    let state = AgentState::new(
+        config.clone(),
+        config_path,
+        store,
+        started_at,
+        timezone,
+        shutdown_tx,
+    );
     trackers::spawn_trackers(state.clone());
+    if config.tray_enabled {
+        system::spawn_tray(state.clone());
+    }
 
     let listener = tokio::net::TcpListener::bind(&config.listen_addr)
         .await
@@ -41,7 +53,7 @@ async fn main() -> Result<()> {
 
     info!(listen_addr = %config.listen_addr, "timeline agent started");
     axum::serve(listener, build_router(state))
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal(shutdown_rx))
         .await
         .context("axum server failed")?;
 
@@ -95,7 +107,11 @@ fn acquire_instance_lock(lockfile_path: &PathBuf) -> Result<std::fs::File> {
     Ok(file)
 }
 
-async fn shutdown_signal() {
-    let _ = tokio::signal::ctrl_c().await;
+async fn shutdown_signal(mut shutdown_rx: tokio::sync::watch::Receiver<bool>) {
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {},
+        _ = shutdown_rx.changed() => {},
+    }
+
     info!("shutdown signal received");
 }

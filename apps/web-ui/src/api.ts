@@ -55,6 +55,30 @@ export type FocusStats = {
   average_focus_block_seconds: number
 }
 
+export type AgentMonitorStatus = {
+  key: string
+  label: string
+  status: string
+  detail: string
+  last_seen: string | null
+}
+
+export type AgentSettingsResponse = {
+  autostart_enabled: boolean
+  tray_enabled: boolean
+  web_ui_url: string
+  launch_command: string
+  monitors: AgentMonitorStatus[]
+}
+
+export type UpdateAutostartRequest = {
+  enabled: boolean
+}
+
+export type UpdateAutostartResponse = {
+  autostart_enabled: boolean
+}
+
 type ApiEnvelope<T> = {
   ok: boolean
   data: T | null
@@ -100,4 +124,25 @@ export function getDomainStats(date: string) {
 
 export function getFocusStats(date: string) {
   return request<FocusStats>(`/api/stats/focus?date=${date}`)
+}
+
+export function getAgentSettings() {
+  return request<AgentSettingsResponse>('/api/settings')
+}
+
+export async function updateAutostart(payload: UpdateAutostartRequest) {
+  const response = await fetch(`${API_BASE_URL}/api/settings/autostart`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  })
+
+  const result = (await response.json()) as ApiEnvelope<UpdateAutostartResponse>
+  if (!response.ok || !result.ok || result.data === null) {
+    throw new Error(result.error?.message ?? '更新开机自启动设置失败')
+  }
+
+  return result.data
 }

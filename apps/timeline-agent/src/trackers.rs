@@ -31,6 +31,7 @@ async fn run_focus_tracker(state: AgentState) -> Result<()> {
     loop {
         ticker.tick().await;
         let observed_at = OffsetDateTime::now_utc();
+        state.mark_focus_online(observed_at).await;
 
         match capture_foreground_window() {
             Ok(snapshot) => sync_focus_snapshot(&state, snapshot, observed_at).await?,
@@ -46,6 +47,7 @@ async fn run_presence_tracker(state: AgentState) -> Result<()> {
     loop {
         ticker.tick().await;
         let observed_at = OffsetDateTime::now_utc();
+        state.mark_presence_online(observed_at).await;
         let presence =
             match detect_presence(Duration::from_secs(state.config().idle_threshold_secs)) {
                 Ok(value) => value,
@@ -184,6 +186,7 @@ pub async fn sync_browser_event(
     observed_at: OffsetDateTime,
 ) -> Result<common::BrowserEventAck> {
     let mut runtime = state.runtime().await;
+    state.mark_browser_online(observed_at).await;
     state
         .store()
         .append_raw_event("browser_event", &payload, observed_at)

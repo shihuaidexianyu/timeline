@@ -1,6 +1,6 @@
-//! Axum routes for health checks, timelines, stats, and browser event ingestion.
+//! Axum routes for health checks, timelines, stats, browser event ingestion, and settings.
 
-use crate::{state::AgentState, trackers::sync_browser_event};
+use crate::{state::AgentState, system, trackers::sync_browser_event};
 use anyhow::Result;
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -9,10 +9,13 @@ use axum::{
     Json, Router,
     routing::{get, post},
 };
-use common::{ApiResponse, BrowserEventPayload, HealthResponse};
+use common::{
+    AgentMonitorStatus, AgentSettingsResponse, ApiResponse, BrowserEventPayload, HealthResponse,
+    UpdateAutostartRequest, UpdateAutostartResponse,
+};
 use serde::Deserialize;
 use time::format_description::parse;
-use time::{Date, OffsetDateTime};
+use time::{Date, Duration, OffsetDateTime};
 use tower_http::cors::{Any, CorsLayer};
 
 pub fn build_router(state: AgentState) -> Router {
@@ -22,6 +25,8 @@ pub fn build_router(state: AgentState) -> Router {
         .route("/api/stats/apps", get(get_app_stats))
         .route("/api/stats/domains", get(get_domain_stats))
         .route("/api/stats/focus", get(get_focus_stats))
+        .route("/api/settings", get(get_settings))
+        .route("/api/settings/autostart", post(post_autostart))
         .route("/api/debug/recent-events", get(get_recent_events))
         .route("/api/events/browser", post(post_browser_event))
         .layer(build_cors_layer())
@@ -99,6 +104,32 @@ async fn get_recent_events(
     Ok(Json(ApiResponse::ok(events)))
 }
 
+async fn get_settings(
+    State(state): State<AgentState>,
+) -> Result<Json<ApiResponse<AgentSettingsResponse>>, AppError> {
+    let autostart_enabled = system::autostart_enabled()?;
+    let monitors = build_monitor_statuses(&state).await;
+
+    Ok(Json(ApiResponse::ok(AgentSettingsResponse {
+        autostart_enabled,
+        tray_enabled: state.config().tray_enabled,
+        web_ui_url: state.config().web_ui_url.clone(),
+        launch_command: state.launch_command(),
+        monitors,
+    })))
+}
+
+async fn post_autostart(
+    State(state): State<AgentState>,
+    Json(payload): Json<UpdateAutostartRequest>,
+) -> Result<Json<ApiResponse<UpdateAutostartResponse>>, AppError> {
+    let autostart_enabled = system::set_autostart_enabled(&state, payload.enabled)?;
+
+    Ok(Json(ApiResponse::ok(UpdateAutostartResponse {
+        autostart_enabled,
+    })))
+}
+
 async fn post_browser_event(
     State(state): State<AgentState>,
     Json(payload): Json<BrowserEventPayload>,
@@ -124,6 +155,78 @@ fn build_cors_layer() -> CorsLayer {
         .allow_origin(Any)
         .allow_methods(Any)
         .allow_headers(Any)
+}
+
+async fn build_monitor_statuses(state: &AgentState) -> Vec<AgentMonitorStatus> {
+    let now = OffsetDateTime::now_utc();
+    let telemetry = state.monitor_snapshot().await;
+    let poll_window = Duration::milliseconds((state.config().poll_interval_millis * 4) as i64);
+    let browser_window = Duration::minutes(15);
+
+    vec![
+        monitor_status(
+            "focus_tracker",
+            "前台窗口监视器",
+            telemetry.focus_last_seen,
+            poll_window,
+            now,
+            "轮询前台应用和窗口标题",
+        ),
+        monitor_status(
+            "presence_tracker",
+            "Presence 监视器",
+            telemetry.presence_last_seen,
+            poll_window,
+            now,
+            "轮询 active / idle / locked 状态",
+        ),
+        monitor_status(
+            "browser_bridge",
+            "浏览器桥接",
+            telemetry.browser_last_seen,
+            browser_window,
+            now,
+            "接收浏览器扩展上报的活动标签页",
+        ),
+        AgentMonitorStatus {
+            key: "tray".to_string(),
+            label: "系统托盘".to_string(),
+            status: if state.config().tray_enabled {
+                "online".to_string()
+            } else {
+                "disabled".to_string()
+            },
+            detail: if state.config().tray_enabled {
+                "左键打开前端，右键弹出菜单".to_string()
+            } else {
+                "托盘已在配置中关闭".to_string()
+            },
+            last_seen: telemetry.tray_last_seen,
+        },
+    ]
+}
+
+fn monitor_status(
+    key: &str,
+    label: &str,
+    last_seen: Option<OffsetDateTime>,
+    freshness: Duration,
+    now: OffsetDateTime,
+    detail: &str,
+) -> AgentMonitorStatus {
+    let status = match last_seen {
+        Some(seen_at) if now - seen_at <= freshness => "online",
+        Some(_) => "stale",
+        None => "waiting",
+    };
+
+    AgentMonitorStatus {
+        key: key.to_string(),
+        label: label.to_string(),
+        status: status.to_string(),
+        detail: detail.to_string(),
+        last_seen,
+    }
 }
 
 struct AppError {

@@ -126,6 +126,35 @@ pub struct HealthResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentMonitorStatus {
+    pub key: String,
+    pub label: String,
+    pub status: String,
+    pub detail: String,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub last_seen: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSettingsResponse {
+    pub autostart_enabled: bool,
+    pub tray_enabled: bool,
+    pub web_ui_url: String,
+    pub launch_command: String,
+    pub monitors: Vec<AgentMonitorStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateAutostartRequest {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateAutostartResponse {
+    pub autostart_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DebugEvent {
     pub id: i64,
     pub kind: String,

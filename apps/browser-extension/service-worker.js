@@ -6,7 +6,7 @@
 
 const AGENT_BASE_URL = 'http://127.0.0.1:46215'
 const HEARTBEAT_ALARM = 'timeline-heartbeat'
-const FOLLOW_UP_DELAYS_MS = [250, 1200]
+const FOLLOW_UP_DELAYS_MS = [250, 1200, 4000]
 const activeTabsByWindow = new Map()
 let focusedWindowId = chrome.windows.WINDOW_ID_NONE
 let followUpTimers = []
@@ -25,13 +25,25 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
   const tab = await chrome.tabs.get(activeInfo.tabId)
   cacheActiveTab(tab)
 
+  await syncFocusedWindowId()
+
   if (activeInfo.windowId === focusedWindowId) {
     await reportTab(tab, 'tab_activated')
     scheduleFocusedWindowRefresh('tab_activated')
   }
 })
 
-chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
+chrome.tabs.onHighlighted.addListener(async (highlightInfo) => {
+  await syncFocusedWindowId()
+  if (highlightInfo.windowId !== focusedWindowId) {
+    return
+  }
+
+  await reportFocusedWindowTab('tab_highlighted')
+  scheduleFocusedWindowRefresh('tab_highlighted')
+})
+
+chrome.tabs.onUpdated.addListener(async (_tabId, changeInfo, tab) => {
   if (!tab.active || typeof tab.windowId !== 'number') {
     return
   }
@@ -39,6 +51,8 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   cacheActiveTab(tab)
 
   const changed = changeInfo.url || changeInfo.title || changeInfo.status === 'complete'
+  await syncFocusedWindowId()
+
   if (changed && tab.windowId === focusedWindowId) {
     void reportTab(tab, 'active_tab_updated')
     scheduleFocusedWindowRefresh('active_tab_updated')
@@ -78,8 +92,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 async function bootstrapState(reason) {
   await syncActiveTabs()
-  const focusedWindow = await chrome.windows.getLastFocused()
-  focusedWindowId = focusedWindow?.id ?? chrome.windows.WINDOW_ID_NONE
+  await syncFocusedWindowId()
   await reportFocusedWindowTab(reason)
   scheduleFocusedWindowRefresh(reason)
 }
@@ -94,6 +107,7 @@ async function syncActiveTabs() {
 }
 
 async function reportFocusedWindowTab(reason) {
+  await syncFocusedWindowId()
   if (focusedWindowId === chrome.windows.WINDOW_ID_NONE) {
     return
   }
@@ -113,6 +127,11 @@ async function reportFocusedWindowTab(reason) {
   if (cachedTab) {
     await reportTab(cachedTab, reason)
   }
+}
+
+async function syncFocusedWindowId() {
+  const focusedWindow = await chrome.windows.getLastFocused()
+  focusedWindowId = focusedWindow?.id ?? chrome.windows.WINDOW_ID_NONE
 }
 
 function scheduleFocusedWindowRefresh(reason) {
@@ -180,13 +199,18 @@ function buildPayload(tab) {
     return null
   }
 
-  let hostname
+  let parsedUrl
   try {
-    hostname = new URL(tab.url).hostname
+    parsedUrl = new URL(tab.url)
   } catch {
     return null
   }
 
+  if (!['http:', 'https:'].includes(parsedUrl.protocol)) {
+    return null
+  }
+
+  const hostname = parsedUrl.hostname
   if (!hostname) {
     return null
   }

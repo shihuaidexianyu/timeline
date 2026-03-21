@@ -130,7 +130,7 @@ function App() {
         <div className="sidebar-brand">
           <p className="eyebrow">Timeline</p>
           <h1>个人活动</h1>
-          <p className="sidebar-text">参考 ActivityWatch 的结构，保留我们当前的统计、时间线和设置能力。</p>
+          <p className="sidebar-text">记录您的日常活动，明白时间都去了哪里。</p>
         </div>
 
         <nav className="sidebar-nav" aria-label="Pages">
@@ -285,9 +285,9 @@ function App() {
                     setAgentSettings((current) =>
                       current
                         ? {
-                            ...current,
-                            autostart_enabled: result.autostart_enabled,
-                          }
+                          ...current,
+                          autostart_enabled: result.autostart_enabled,
+                        }
                         : current,
                     )
                   } catch (toggleError) {
@@ -355,7 +355,7 @@ function StatsPage(props: {
             slices={props.dashboard.presenceSlices}
             filter={null}
             filterKind="domain"
-            onSelect={() => {}}
+            onSelect={() => { }}
           />
         </div>
       </section>

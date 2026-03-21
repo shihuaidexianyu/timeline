@@ -6,8 +6,10 @@
 
 const AGENT_BASE_URL = 'http://127.0.0.1:46215'
 const HEARTBEAT_ALARM = 'timeline-heartbeat'
+const FOLLOW_UP_DELAYS_MS = [250, 1200]
 const activeTabsByWindow = new Map()
 let focusedWindowId = chrome.windows.WINDOW_ID_NONE
+let followUpTimers = []
 
 chrome.runtime.onInstalled.addListener(() => {
   ensureHeartbeat()
@@ -25,6 +27,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 
   if (activeInfo.windowId === focusedWindowId) {
     await reportTab(tab, 'tab_activated')
+    scheduleFocusedWindowRefresh('tab_activated')
   }
 })
 
@@ -38,6 +41,7 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
   const changed = changeInfo.url || changeInfo.title || changeInfo.status === 'complete'
   if (changed && tab.windowId === focusedWindowId) {
     void reportTab(tab, 'active_tab_updated')
+    scheduleFocusedWindowRefresh('active_tab_updated')
   }
 })
 
@@ -57,11 +61,13 @@ chrome.windows.onRemoved.addListener((windowId) => {
 
 chrome.windows.onFocusChanged.addListener((windowId) => {
   focusedWindowId = windowId
+  clearFollowUpRefreshes()
   if (windowId === chrome.windows.WINDOW_ID_NONE) {
     return
   }
 
   void reportFocusedWindowTab('window_focus_changed')
+  scheduleFocusedWindowRefresh('window_focus_changed')
 })
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -75,6 +81,7 @@ async function bootstrapState(reason) {
   const focusedWindow = await chrome.windows.getLastFocused()
   focusedWindowId = focusedWindow?.id ?? chrome.windows.WINDOW_ID_NONE
   await reportFocusedWindowTab(reason)
+  scheduleFocusedWindowRefresh(reason)
 }
 
 async function syncActiveTabs() {
@@ -106,6 +113,30 @@ async function reportFocusedWindowTab(reason) {
   if (cachedTab) {
     await reportTab(cachedTab, reason)
   }
+}
+
+function scheduleFocusedWindowRefresh(reason) {
+  clearFollowUpRefreshes()
+
+  for (const delay of FOLLOW_UP_DELAYS_MS) {
+    const timer = setTimeout(() => {
+      if (focusedWindowId === chrome.windows.WINDOW_ID_NONE) {
+        return
+      }
+
+      void reportFocusedWindowTab(`${reason}_retry_${delay}`)
+    }, delay)
+
+    followUpTimers.push(timer)
+  }
+}
+
+function clearFollowUpRefreshes() {
+  for (const timer of followUpTimers) {
+    clearTimeout(timer)
+  }
+
+  followUpTimers = []
 }
 
 async function reportTab(tab, reason) {

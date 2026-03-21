@@ -210,7 +210,12 @@ pub async fn sync_browser_event(
         .current_focus
         .as_ref()
         .map(|focus| focus.is_browser)
-        .unwrap_or(false);
+        .unwrap_or(false)
+        || capture_foreground_window()
+            .ok()
+            .flatten()
+            .map(|snapshot| snapshot.is_browser)
+            .unwrap_or(false);
     if !browser_is_foreground {
         if let Some(current) = runtime.current_browser.take() {
             state

@@ -10,8 +10,8 @@ import {
   type DonutSlice,
 } from '../lib/chart-model'
 
-const LABEL_COLOR = '#eef4ff'
-const MUTED_COLOR = '#8fa4c6'
+const LABEL_COLOR = '#1d2c43'
+const MUTED_COLOR = '#6f839f'
 const MONO_FAMILY = '"IBM Plex Mono", "SFMono-Regular", Consolas, monospace'
 
 export function DonutChart(props: {

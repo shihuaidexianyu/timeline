@@ -14,8 +14,6 @@ import {
 } from './lib/chart-model'
 
 const ZOOM_OPTIONS = [
-  { hours: 24, label: '24h' },
-  { hours: 12, label: '12h' },
   { hours: 8, label: '8h' },
   { hours: 6, label: '6h' },
   { hours: 4, label: '4h' },
@@ -25,6 +23,8 @@ const ZOOM_OPTIONS = [
   { hours: 0.25, label: '15m' },
   { hours: 1 / 12, label: '5m' },
 ] as const
+const MAX_ZOOM_HOURS = 8
+const MIN_ZOOM_HOURS = 1 / 12
 
 function App() {
   const [selectedDate, setSelectedDate] = useState(() => todayString())
@@ -37,7 +37,7 @@ function App() {
   const [appFilter, setAppFilter] = useState<DashboardFilter>(null)
   const [domainFilter, setDomainFilter] = useState<DashboardFilter>(null)
   const [selectedBrowserSegmentId, setSelectedBrowserSegmentId] = useState<string | null>(null)
-  const [zoomHours, setZoomHours] = useState<number>(24)
+  const [zoomHours, setZoomHours] = useState<number>(MAX_ZOOM_HOURS)
   const [viewStartHour, setViewStartHour] = useState(0)
 
   useEffect(() => {
@@ -78,7 +78,7 @@ function App() {
   }, [selectedDate, refreshToken])
 
   useEffect(() => {
-    setViewStartHour((current) => Math.min(current, 24 - zoomHours))
+    setViewStartHour((current) => clampViewStart(current, zoomHours))
   }, [zoomHours])
 
   const dashboard = timeline ? buildDashboardModel(timeline, activeOnly) : null
@@ -115,7 +115,7 @@ function App() {
             <p className="eyebrow">timeline / analysis panel</p>
             <h1>注意力分析面板</h1>
             <p className="hero-text">
-              图表层已经切到成熟库。主时间线支持滚轮缩放和拖动窗口，点击浏览器应用段后，右侧展开该时间段对应的域名明细。
+              主时间线以底部缩放条为主控件，最长可看 8 小时。点击浏览器应用段后，右侧展开该时间段对应的域名明细。
             </p>
           </div>
 
@@ -209,11 +209,11 @@ function App() {
               <div className="panel-header">
                 <div>
                   <p className="section-kicker">scale</p>
-                  <h2>时间尺度缩放</h2>
+                  <h2>快速尺度</h2>
                 </div>
                 <p className="timezone-label">
                   当前窗口 {formatHourLabel(viewStartHour)} -{' '}
-                  {formatHourLabel(viewStartHour + zoomHours)}
+                  {formatHourLabel(viewStartHour + zoomHours)} / 最长 8h
                 </p>
               </div>
 
@@ -225,7 +225,7 @@ function App() {
                       type="button"
                       className={`zoom-button ${zoomHours === option.hours ? 'is-active' : ''}`}
                       onClick={() => {
-                        setZoomHours(option.hours)
+                        setZoomHours(clampZoomHours(option.hours))
                       }}
                     >
                       {option.label}
@@ -253,46 +253,7 @@ function App() {
                     </button>
                   ) : null}
                 </div>
-
-                <div className="range-controls">
-                  <button
-                    type="button"
-                    className="zoom-button"
-                    onClick={() => {
-                      const step = getViewStep(zoomHours)
-                      setViewStartHour((current) =>
-                        clampViewStart(current - Math.max(zoomHours / 2, step), zoomHours),
-                      )
-                    }}
-                    disabled={viewStartHour <= 0}
-                  >
-                    ←
-                  </button>
-                  <input
-                    className="range-slider"
-                    type="range"
-                    min={0}
-                    max={24 - zoomHours}
-                    step={getViewStep(zoomHours)}
-                    value={viewStartHour}
-                    onChange={(event) => {
-                      setViewStartHour(Number(event.target.value))
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="zoom-button"
-                    onClick={() => {
-                      const step = getViewStep(zoomHours)
-                      setViewStartHour((current) =>
-                        clampViewStart(current + Math.max(zoomHours / 2, step), zoomHours),
-                      )
-                    }}
-                    disabled={viewStartHour >= 24 - zoomHours}
-                  >
-                    →
-                  </button>
-                </div>
+                <p className="zoom-hint">拖动图表底部缩放条或滚轮缩放，顶部按钮只负责快速切换尺度。</p>
               </div>
             </section>
 
@@ -323,9 +284,13 @@ function App() {
                   viewStartSec={viewStartSec}
                   viewEndSec={viewEndSec}
                   interactiveZoom
+                  minViewHours={MIN_ZOOM_HOURS}
+                  maxViewHours={MAX_ZOOM_HOURS}
                   selectedSegmentId={selectedBrowserSegment?.id ?? null}
                   onViewportChange={(nextStartSec, nextEndSec) => {
-                    const nextZoom = normalizeZoomHours((nextEndSec - nextStartSec) / 3600)
+                    const nextZoom = clampZoomHours(
+                      normalizeZoomHours((nextEndSec - nextStartSec) / 3600),
+                    )
                     const nextStartHour = normalizeZoomHours(nextStartSec / 3600)
                     setZoomHours(nextZoom)
                     setViewStartHour(clampViewStart(nextStartHour, nextZoom))
@@ -468,27 +433,11 @@ function formatHourLabel(hours: number) {
   return `${`${whole}`.padStart(2, '0')}:${`${minutes}`.padStart(2, '0')}`
 }
 
-function getViewStep(zoomHours: number) {
-  if (zoomHours <= 1 / 12) {
-    return 1 / 60
-  }
-  if (zoomHours <= 0.25) {
-    return 1 / 24
-  }
-  if (zoomHours <= 1) {
-    return 1 / 12
-  }
-  if (zoomHours <= 4) {
-    return 0.25
-  }
-  return 0.5
-}
-
 function bestFitZoom(targetHours: number) {
-  const match =
-    ZOOM_OPTIONS.find((option) => option.hours >= Math.max(targetHours * 1.6, 1 / 12)) ??
-    ZOOM_OPTIONS[ZOOM_OPTIONS.length - 1]
-  return match.hours
+  const target = clampZoomHours(Math.max(targetHours * 1.6, MIN_ZOOM_HOURS))
+  const reversed = [...ZOOM_OPTIONS].reverse()
+  const match = reversed.find((option) => option.hours >= target)
+  return match?.hours ?? MAX_ZOOM_HOURS
 }
 
 function clampViewStart(startHour: number, zoomHours: number) {
@@ -497,6 +446,10 @@ function clampViewStart(startHour: number, zoomHours: number) {
 
 function normalizeZoomHours(hours: number) {
   return Math.round(hours * 60) / 60
+}
+
+function clampZoomHours(hours: number) {
+  return Math.max(MIN_ZOOM_HOURS, Math.min(hours, MAX_ZOOM_HOURS))
 }
 
 export default App

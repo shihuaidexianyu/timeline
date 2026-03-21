@@ -207,9 +207,9 @@
 
 .zoom-controls {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 12px;
-  align-items: center;
+  align-items: flex-start;
 }
 
 .zoom-buttons {
@@ -218,17 +218,10 @@
   gap: 8px;
 }
 
-.range-controls {
-  min-width: min(520px, 100%);
-  flex: 1;
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 8px;
-  align-items: center;
-}
-
-.range-slider {
-  width: 100%;
+.zoom-hint {
+  margin: 0;
+  color: var(--text-soft);
+  font-size: 0.84rem;
 }
 
 .dashboard-grid {
@@ -379,8 +372,7 @@
 }
 
 @media (max-width: 840px) {
-  .toolbar-grid,
-  .range-controls {
+  .toolbar-grid {
     grid-template-columns: 1fr;
   }
 }

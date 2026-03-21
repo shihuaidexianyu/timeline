@@ -53,6 +53,8 @@ export function TimelineChart(props: {
   viewEndSec: number
   selectedSegmentId?: string | null
   interactiveZoom?: boolean
+  minViewHours?: number
+  maxViewHours?: number
   onViewportChange?: (startSec: number, endSec: number) => void
   onSelectSegment?: (segment: ChartSegment) => void
 }) {
@@ -151,7 +153,8 @@ export function TimelineChart(props: {
               type: 'inside',
               xAxisIndex: 0,
               filterMode: 'weakFilter',
-              minSpan: 300,
+              minSpan: (props.minViewHours ?? 1 / 12) * 3600,
+              maxSpan: (props.maxViewHours ?? 24) * 3600,
               startValue: props.viewStartSec,
               endValue: props.viewEndSec,
             },
@@ -159,7 +162,8 @@ export function TimelineChart(props: {
               type: 'slider',
               xAxisIndex: 0,
               filterMode: 'weakFilter',
-              minSpan: 300,
+              minSpan: (props.minViewHours ?? 1 / 12) * 3600,
+              maxSpan: (props.maxViewHours ?? 24) * 3600,
               height: 26,
               bottom: 12,
               brushSelect: false,
@@ -261,7 +265,15 @@ export function TimelineChart(props: {
         },
       ],
     } as unknown as echarts.EChartsOption
-  }, [props.interactiveZoom, props.rows, props.viewEndSec, props.viewStartSec, data])
+  }, [
+    data,
+    props.interactiveZoom,
+    props.maxViewHours,
+    props.minViewHours,
+    props.rows,
+    props.viewEndSec,
+    props.viewStartSec,
+  ])
 
   const onEvents = useMemo(
     () => ({

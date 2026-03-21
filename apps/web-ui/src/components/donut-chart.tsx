@@ -73,7 +73,11 @@ export function DonutChart(props: {
             return label
           }
 
-          return `{name|${truncateLabel(label, 18)}}\n{meta|${formatDuration(
+          const isActive = isFilterActive(props.filter, props.filterKind, slice.key)
+          const nameStyle = isActive ? 'nameActive' : 'name'
+          const metaStyle = isActive ? 'metaActive' : 'meta'
+
+          return `{${nameStyle}|${truncateLabel(label, 18)}}\n{${metaStyle}|${formatDuration(
             slice.value,
           )}  ${slice.percentage.toFixed(1)}%}`
         },
@@ -87,11 +91,32 @@ export function DonutChart(props: {
               overflow: 'truncate',
               lineHeight: 16,
             },
+            nameActive: {
+              color: '#13315c',
+              fontSize: 11,
+              fontWeight: 700,
+              width: LEGEND_WIDTH,
+              overflow: 'truncate',
+              lineHeight: 16,
+              backgroundColor: 'rgba(79, 124, 255, 0.12)',
+              borderRadius: 6,
+              padding: [2, 6, 2, 6],
+            },
             meta: {
               color: MUTED_COLOR,
               fontFamily: MONO_FAMILY,
               fontSize: 10,
               lineHeight: 14,
+            },
+            metaActive: {
+              color: '#31598f',
+              fontFamily: MONO_FAMILY,
+              fontSize: 10,
+              fontWeight: 600,
+              lineHeight: 14,
+              backgroundColor: 'rgba(79, 124, 255, 0.08)',
+              borderRadius: 6,
+              padding: [1, 6, 1, 6],
             },
           },
         },

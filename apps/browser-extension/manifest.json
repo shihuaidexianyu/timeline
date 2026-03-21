@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "timeline browser bridge",
+  "version": "0.1.0",
+  "description": "Send active tab domain events to the local timeline desktop agent.",
+  "permissions": [
+    "tabs",
+    "alarms",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:46215/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+  "action": {
+    "default_title": "timeline browser bridge"
+  }
+}

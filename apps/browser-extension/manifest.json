@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "timeline browser bridge",
+  "name": "timeline",
   "version": "0.1.0",
   "description": "Send active tab domain events to the local timeline agent.",
   "permissions": [
@@ -16,6 +16,6 @@
     "service_worker": "service-worker.js"
   },
   "action": {
-    "default_title": "timeline browser bridge"
+    "default_title": "timeline"
   }
 }

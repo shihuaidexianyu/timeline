@@ -50,7 +50,10 @@ async fn get_timeline_day(
     Query(query): Query<DayQuery>,
 ) -> Result<Json<ApiResponse<common::TimelineDayResponse>>, AppError> {
     let date = parse_or_today(query.date.as_deref(), state.timezone())?;
-    let timeline = state.store().read_day_timeline(date, state.timezone()).await?;
+    let timeline = state
+        .store()
+        .read_day_timeline(date, state.timezone())
+        .await?;
     Ok(Json(ApiResponse::ok(timeline)))
 }
 
@@ -68,7 +71,10 @@ async fn get_domain_stats(
     Query(query): Query<DayQuery>,
 ) -> Result<Json<ApiResponse<Vec<common::DurationStat>>>, AppError> {
     let date = parse_or_today(query.date.as_deref(), state.timezone())?;
-    let stats = state.store().read_domain_stats(date, state.timezone()).await?;
+    let stats = state
+        .store()
+        .read_domain_stats(date, state.timezone())
+        .await?;
     Ok(Json(ApiResponse::ok(stats)))
 }
 
@@ -77,7 +83,10 @@ async fn get_focus_stats(
     Query(query): Query<DayQuery>,
 ) -> Result<Json<ApiResponse<common::FocusStats>>, AppError> {
     let date = parse_or_today(query.date.as_deref(), state.timezone())?;
-    let stats = state.store().read_focus_stats(date, state.timezone()).await?;
+    let stats = state
+        .store()
+        .read_focus_stats(date, state.timezone())
+        .await?;
     Ok(Json(ApiResponse::ok(stats)))
 }
 
@@ -99,8 +108,8 @@ async fn post_browser_event(
 
 fn parse_or_today(value: Option<&str>, timezone: time::UtcOffset) -> Result<Date, AppError> {
     if let Some(value) = value {
-        let format =
-            parse("[year]-[month]-[day]").map_err(|error| AppError::internal(anyhow::anyhow!(error)))?;
+        let format = parse("[year]-[month]-[day]")
+            .map_err(|error| AppError::internal(anyhow::anyhow!(error)))?;
         return Date::parse(value, &format)
             .map_err(|_| AppError::bad_request("invalid_date", "date must use YYYY-MM-DD"));
     }

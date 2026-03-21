@@ -46,15 +46,14 @@ async fn run_presence_tracker(state: AgentState) -> Result<()> {
     loop {
         ticker.tick().await;
         let observed_at = OffsetDateTime::now_utc();
-        let presence = match detect_presence(Duration::from_secs(
-            state.config().idle_threshold_secs,
-        )) {
-            Ok(value) => value,
-            Err(error) => {
-                warn!(?error, "failed to read presence state");
-                continue;
-            }
-        };
+        let presence =
+            match detect_presence(Duration::from_secs(state.config().idle_threshold_secs)) {
+                Ok(value) => value,
+                Err(error) => {
+                    warn!(?error, "failed to read presence state");
+                    continue;
+                }
+            };
 
         sync_presence_state(&state, presence, observed_at).await?;
     }
@@ -71,7 +70,11 @@ async fn sync_focus_snapshot(
     let same_as_current = runtime
         .current_focus
         .as_ref()
-        .and_then(|current| next_fingerprint.as_ref().map(|next| current.fingerprint == *next))
+        .and_then(|current| {
+            next_fingerprint
+                .as_ref()
+                .map(|next| current.fingerprint == *next)
+        })
         .unwrap_or(false);
     if same_as_current {
         return Ok(());
@@ -84,7 +87,10 @@ async fn sync_focus_snapshot(
             .await?;
     }
 
-    let leaving_browser = snapshot.as_ref().map(|value| !value.is_browser).unwrap_or(true);
+    let leaving_browser = snapshot
+        .as_ref()
+        .map(|value| !value.is_browser)
+        .unwrap_or(true);
     if leaving_browser {
         if let Some(previous_browser) = runtime.current_browser.take() {
             state
@@ -185,7 +191,10 @@ pub async fn sync_browser_event(
 
     if is_ignored_domain(state, &payload.domain) {
         if let Some(current) = runtime.current_browser.take() {
-            state.store().end_browser_segment(current.id, observed_at).await?;
+            state
+                .store()
+                .end_browser_segment(current.id, observed_at)
+                .await?;
         }
 
         return Ok(common::BrowserEventAck {
@@ -201,7 +210,10 @@ pub async fn sync_browser_event(
         .unwrap_or(false);
     if !browser_is_foreground {
         if let Some(current) = runtime.current_browser.take() {
-            state.store().end_browser_segment(current.id, observed_at).await?;
+            state
+                .store()
+                .end_browser_segment(current.id, observed_at)
+                .await?;
         }
 
         return Ok(common::BrowserEventAck {
@@ -223,7 +235,10 @@ pub async fn sync_browser_event(
     }
 
     if let Some(current) = runtime.current_browser.take() {
-        state.store().end_browser_segment(current.id, observed_at).await?;
+        state
+            .store()
+            .end_browser_segment(current.id, observed_at)
+            .await?;
     }
 
     let payload = common::BrowserEventPayload {

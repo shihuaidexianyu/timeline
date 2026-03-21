@@ -7,14 +7,15 @@ use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
 use std::time::Duration;
-use windows::Win32::Foundation::{CloseHandle, HWND};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND};
+use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
 use windows::Win32::System::StationsAndDesktops::{
-    CloseDesktop, DESKTOP_RIGHTS, GetUserObjectInformationW, HDESK, OpenInputDesktop, UOI_NAME,
+    CloseDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_READOBJECTS, GetUserObjectInformationW, HDESK,
+    OpenInputDesktop, UOI_NAME,
 };
 use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::System::Threading::{
-    OpenProcess, ProcessIdToSessionId, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION,
+    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -47,7 +48,7 @@ impl ForegroundWindowSnapshot {
 
 pub fn capture_foreground_window() -> Result<Option<ForegroundWindowSnapshot>> {
     let hwnd = unsafe { GetForegroundWindow() };
-    if hwnd.0 == 0 {
+    if hwnd.0.is_null() {
         return Ok(None);
     }
 
@@ -73,7 +74,7 @@ pub fn capture_foreground_window() -> Result<Option<ForegroundWindowSnapshot>> {
     let window_title = read_window_title(hwnd);
 
     Ok(Some(ForegroundWindowSnapshot {
-        hwnd: hwnd.0,
+        hwnd: hwnd.0 as isize,
         process_id,
         session_id,
         process_name: process_name.clone(),
@@ -103,7 +104,9 @@ fn read_idle_duration() -> Result<Duration> {
     };
 
     unsafe {
-        GetLastInputInfo(&mut last_input_info).context("GetLastInputInfo failed")?;
+        GetLastInputInfo(&mut last_input_info)
+            .ok()
+            .context("GetLastInputInfo failed")?;
     }
 
     let now_tick = unsafe { GetTickCount64() };
@@ -126,11 +129,7 @@ fn read_window_title(hwnd: HWND) -> Option<String> {
 
     let value = OsString::from_wide(&buffer[..written as usize]);
     let title = value.to_string_lossy().trim().to_string();
-    if title.is_empty() {
-        None
-    } else {
-        Some(title)
-    }
+    if title.is_empty() { None } else { Some(title) }
 }
 
 fn read_process_path(process_id: u32) -> Result<String> {
@@ -158,7 +157,7 @@ fn read_process_path(process_id: u32) -> Result<String> {
 fn read_session_id(process_id: u32) -> Result<u32> {
     let mut session_id = 0u32;
     unsafe {
-        ProcessIdToSessionId(process_id, &mut session_id)
+        ProcessIdToSessionId(process_id, &mut session_id as *mut u32)
             .context("ProcessIdToSessionId failed")?;
     }
 
@@ -167,14 +166,14 @@ fn read_session_id(process_id: u32) -> Result<u32> {
 
 fn is_workstation_locked() -> Result<bool> {
     let desktop = unsafe {
-        OpenInputDesktop(0, false, DESKTOP_RIGHTS(0x0001))
+        OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_READOBJECTS)
             .context("OpenInputDesktop failed")?
     };
     let _guard = DesktopGuard(desktop);
 
     let mut needed = 0u32;
     unsafe {
-        let _ = GetUserObjectInformationW(desktop.into(), UOI_NAME, None, 0, &mut needed);
+        let _ = GetUserObjectInformationW(HANDLE(desktop.0), UOI_NAME, None, 0, Some(&mut needed));
     }
 
     if needed == 0 {
@@ -184,11 +183,11 @@ fn is_workstation_locked() -> Result<bool> {
     let mut buffer = vec![0u16; needed as usize / 2];
     unsafe {
         GetUserObjectInformationW(
-            desktop.into(),
+            HANDLE(desktop.0),
             UOI_NAME,
             Some(buffer.as_mut_ptr().cast()),
             needed,
-            &mut needed,
+            Some(&mut needed),
         )
         .context("GetUserObjectInformationW failed")?;
     }

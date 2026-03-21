@@ -568,7 +568,10 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 fn day_bounds(date: Date, timezone: UtcOffset) -> Result<(OffsetDateTime, OffsetDateTime)> {
     let start_local = PrimitiveDateTime::new(date, time::Time::MIDNIGHT).assume_offset(timezone);
     let end_local = start_local + Duration::days(1);
-    Ok((start_local.to_offset(UtcOffset::UTC), end_local.to_offset(UtcOffset::UTC)))
+    Ok((
+        start_local.to_offset(UtcOffset::UTC),
+        end_local.to_offset(UtcOffset::UTC),
+    ))
 }
 
 fn clamp_start(value: OffsetDateTime, min: OffsetDateTime) -> OffsetDateTime {

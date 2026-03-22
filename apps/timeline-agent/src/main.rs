@@ -1,4 +1,7 @@
-#![cfg_attr(all(target_os = "windows", not(debug_assertions)), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(target_os = "windows", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
 
 //! Entry point for the Windows timeline agent that collects focus and presence data.
 
@@ -25,8 +28,8 @@ use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config_path = parse_config_path();
-    let config = AppConfig::load(config_path.clone())?;
+    let explicit_config_path = parse_config_path();
+    let (config, config_path) = AppConfig::load(explicit_config_path)?;
     init_tracing(config.debug);
 
     let timezone = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
@@ -38,7 +41,7 @@ async fn main() -> Result<()> {
 
     let state = AgentState::new(
         config.clone(),
-        config_path,
+        Some(config_path),
         store,
         started_at,
         timezone,

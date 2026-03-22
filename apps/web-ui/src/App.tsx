@@ -306,7 +306,7 @@ function App() {
     <main className="app-shell app-layout">
       <aside className="sidebar-shell">
         <div className="sidebar-brand">
-          <p className="eyebrow">时间记录</p>
+          <p className="eyebrow">TimeLine</p>
           <h1>个人活动</h1>
           <p className="sidebar-text">记录您的日常活动，明白时间都去了哪里。</p>
         </div>
@@ -594,20 +594,20 @@ function WeeklyRhythmCard(props: {
         <div className="card-head-side">
           <RefreshBadge active={props.refreshing} />
           <div className="showcase-chip-row">
-          <button
-            type="button"
-            className={`showcase-chip-button ${selectedMetric === 'active' ? 'is-selected' : ''}`}
-            onClick={() => setSelectedMetric('active')}
-          >
-            活跃
-          </button>
-          <button
-            type="button"
-            className={`showcase-chip-button ${selectedMetric === 'focus' ? 'is-selected' : ''}`}
-            onClick={() => setSelectedMetric('focus')}
-          >
-            应用
-          </button>
+            <button
+              type="button"
+              className={`showcase-chip-button ${selectedMetric === 'active' ? 'is-selected' : ''}`}
+              onClick={() => setSelectedMetric('active')}
+            >
+              活跃
+            </button>
+            <button
+              type="button"
+              className={`showcase-chip-button ${selectedMetric === 'focus' ? 'is-selected' : ''}`}
+              onClick={() => setSelectedMetric('focus')}
+            >
+              应用
+            </button>
           </div>
         </div>
       </div>
@@ -929,9 +929,8 @@ function TimelinePage(props: {
                   <button
                     key={preset}
                     type="button"
-                    className={`timeline-control-button ${
-                      Math.abs(props.zoomHours - preset) < 0.001 ? 'is-active' : ''
-                    }`}
+                    className={`timeline-control-button ${Math.abs(props.zoomHours - preset) < 0.001 ? 'is-active' : ''
+                      }`}
                     onClick={() => {
                       const centerHour = props.viewStartHour + props.zoomHours / 2
                       applyWindow(preset, centerHour - preset / 2)
@@ -1037,59 +1036,87 @@ function TimelinePage(props: {
               <div className="timeline-panel-actions">
                 <RefreshBadge active={props.isTimelineRefreshing} />
                 {selectedFocusSegment ? (
-                <p className="timezone-label">
-                  {formatClockRange(
-                    selectedFocusSegment.startSec,
-                    selectedFocusSegment.endSec,
-                  )}
-                </p>
+                  <p className="timezone-label">
+                    {formatClockRange(
+                      selectedFocusSegment.startSec,
+                      selectedFocusSegment.endSec,
+                    )}
+                  </p>
                 ) : null}
               </div>
             </div>
 
-            <div className="browser-detail-scroll">
+            <div className="browser-detail-summary">
               {selectedFocusSegment ? (
                 <>
-                  <div className="selection-summary-card">
-                    <div>
-                      <p className="section-kicker">
-                        {selectedFocusSegment.isBrowser ? '已选中浏览器段' : '已选中应用段'}
-                      </p>
-                      <strong>{selectedFocusSegment.label}</strong>
+                  <div className="detail-hero-card">
+                    <div className="detail-hero-main">
+                      <span
+                        className="detail-hero-dot"
+                        aria-hidden="true"
+                        style={{ backgroundColor: selectedFocusSegment.color }}
+                      />
+                      <div>
+                        <p className="section-kicker">
+                          {selectedFocusSegment.isBrowser ? '已选中浏览器段' : '已选中应用段'}
+                        </p>
+                        <strong>{selectedFocusSegment.label}</strong>
+                      </div>
                     </div>
-                    <button
-                      type="button"
-                      className="timeline-control-button"
-                      onClick={() => {
-                        props.setSelectedFocusSegmentId(null)
-                        props.setDomainFilter(null)
-                      }}
-                    >
-                      清除选择
-                    </button>
+                    <div className="detail-hero-actions">
+                      <span
+                        className={`detail-type-badge ${selectedFocusSegment.isBrowser ? 'is-browser' : 'is-app'
+                          }`}
+                      >
+                        {selectedFocusSegment.isBrowser ? '浏览器应用' : '普通应用'}
+                      </span>
+                      <button
+                        type="button"
+                        className="timeline-control-button"
+                        onClick={() => {
+                          props.setSelectedFocusSegmentId(null)
+                          props.setDomainFilter(null)
+                        }}
+                      >
+                        清除选择
+                      </button>
+                    </div>
                   </div>
 
-                  <div className="selection-summary-meta">
-                    <span>
-                      <strong>时间段</strong>
-                      {formatClockRange(
-                        selectedFocusSegment.startSec,
-                        selectedFocusSegment.endSec,
-                      )}
-                    </span>
-                    <span>
-                      <strong>时长</strong>
-                      {formatDuration(selectedFocusSegment.durationSec)}
-                    </span>
+                  <div className="detail-meta-grid">
+                    <article className="detail-meta-card">
+                      <p className="section-kicker">
+                        时间段
+                      </p>
+                      <strong>
+                        {formatClockRange(
+                          selectedFocusSegment.startSec,
+                          selectedFocusSegment.endSec,
+                        )}
+                      </strong>
+                    </article>
+                    <article className="detail-meta-card">
+                      <p className="section-kicker">时长</p>
+                      <strong>{formatDuration(selectedFocusSegment.durationSec)}</strong>
+                    </article>
+                    <article className="detail-meta-card">
+                      <p className="section-kicker">类型</p>
+                      <strong>
+                        {selectedFocusSegment.isBrowser ? '浏览器窗口' : '桌面应用'}
+                      </strong>
+                    </article>
                   </div>
 
-                  <div className="browser-context">
-                    <strong>{selectedFocusSegment.label}</strong>
-                    <span>{selectedFocusSegment.detail}</span>
+                  <div className="detail-note-card">
+                    <p className="section-kicker">
+                      {selectedFocusSegment.isBrowser ? '标签页标题' : '窗口标题'}
+                    </p>
+                    <strong>{selectedFocusSegment.detail}</strong>
+                    <span>{selectedFocusSegment.label}</span>
                   </div>
 
                   {selectedFocusSegment.isBrowser ? (
-                    <div className="insight-grid browser-detail-layout">
+                    <div className="detail-section insight-grid browser-detail-layout">
                       <div className="panel panel-subtle browser-summary-panel">
                         <BrowserDomainList
                           slices={props.browserDetail.slices}
@@ -1100,26 +1127,35 @@ function TimelinePage(props: {
                       </div>
                     </div>
                   ) : (
-                    <div className="empty-card browser-empty browser-empty-compact">
-                      当前选中段不是浏览器应用，因此这里不显示域名拆分数据。
+                    <div className="detail-placeholder-card">
+                      当前选中段是普通应用，这里不展示域名占比；你仍然可以在下方查看同一时间窗口内的应用段列表。
                     </div>
                   )}
                 </>
               ) : (
-                <div className="empty-card browser-empty">
-                  点击主时间线里的任意应用段后，这里会显示该段的通用明细；如果是浏览器应用，还会额外显示域名占用时间。
+                <div className="detail-empty-state">
+                  <p className="section-kicker">等待选择</p>
+                  <strong>先在主时间线里点中一段记录</strong>
+                  <span>
+                    这里会显示该段的时间、时长、窗口标题；如果它是浏览器应用，还会继续展示域名占比和筛选。
+                  </span>
                 </div>
               )}
+            </div>
 
-              <div className="detail-list-section">
-                <div className="browser-domain-list-head">
-                  <div>
-                    <p className="section-kicker">窗口记录</p>
-                    <h3>当前窗口内的应用段</h3>
-                  </div>
-                  <strong>{visibleFocusItems.length} 条</strong>
+            <div className="detail-section detail-list-section">
+              <div className="detail-section-head">
+                <div>
+                  <p className="section-kicker">窗口记录</p>
+                  <h3>当前窗口内的应用段</h3>
+                  <small className="detail-section-caption">
+                    列表单独滚动；点击任意一项后，上方详情会立即更新。
+                  </small>
                 </div>
+                <strong>{visibleFocusItems.length} 条</strong>
+              </div>
 
+              <div className="detail-segment-scroll">
                 <FocusSegmentList
                   segments={visibleFocusItems}
                   selectedSegmentId={props.selectedFocusSegmentId}
@@ -1261,14 +1297,33 @@ function BrowserDomainList(props: {
   onSelect: (value: DashboardFilter) => void
   totalLabel: string
 }) {
+  const activeSlice =
+    props.filter?.kind === 'domain'
+      ? props.slices.find((slice) => slice.key === props.filter?.key) ?? null
+      : null
+
   return (
     <div className="browser-domain-list">
-      <div className="browser-domain-list-head">
+      <div className="detail-section-head browser-domain-list-head">
         <div>
           <p className="section-kicker">域名</p>
           <h3>域名占比</h3>
+          <small className="detail-section-caption">
+            {activeSlice ? `已筛选：${activeSlice.label}` : '点击域名可筛选当前浏览器段'}
+          </small>
         </div>
-        <strong>{props.totalLabel}</strong>
+        <div className="detail-head-side">
+          <strong>{props.totalLabel}</strong>
+          {activeSlice ? (
+            <button
+              type="button"
+              className="detail-inline-button"
+              onClick={() => props.onSelect(null)}
+            >
+              清除
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div className="browser-domain-items">
@@ -1324,10 +1379,18 @@ function FocusSegmentList(props: {
             onClick={() => props.onSelectSegment(segment)}
           >
             <div className="detail-segment-head">
-              <span className="detail-segment-name">
-                <i style={{ backgroundColor: segment.color }} />
-                {segment.label}
-              </span>
+              <div className="detail-segment-title">
+                <span className="detail-segment-name">
+                  <i style={{ backgroundColor: segment.color }} />
+                  {segment.label}
+                </span>
+                <span
+                  className={`detail-segment-chip ${segment.isBrowser ? 'is-browser' : 'is-app'
+                    }`}
+                >
+                  {segment.isBrowser ? '浏览器' : '应用'}
+                </span>
+              </div>
               <span className="detail-segment-range">
                 {formatClockRange(segment.startSec, segment.endSec)}
               </span>

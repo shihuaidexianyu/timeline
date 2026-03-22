@@ -1,7 +1,7 @@
 /* ActivityWatch-inspired timeline with stacked lanes, navigator, and detail table. */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { MutableRefObject, PointerEvent as ReactPointerEvent, WheelEvent } from 'react'
+import type { MutableRefObject, PointerEvent as ReactPointerEvent } from 'react'
 import {
   formatClockRange,
   formatDuration,
@@ -262,15 +262,6 @@ export function TimelineChart(props: {
               setHoveredLaneLeftPx,
             )
           }}
-          onWheel={(event) =>
-            handleTimelineWheel(event, {
-              minZoomSec,
-              maxZoomSec,
-              viewStartSec: props.viewStartSec,
-              viewEndSec: props.viewEndSec,
-              onViewportChange: props.onViewportChange,
-            })
-          }
         >
           {layout.map((row, rowIndex) => (
             <div key={row.id} className="timeline-row-block">
@@ -697,38 +688,6 @@ function updateHoveredTime(
   }
 
   setHoveredLaneLeftPx(clampNumber(clientX - laneRect.left, 0, laneRect.width))
-}
-
-function handleTimelineWheel(
-  event: WheelEvent<HTMLDivElement>,
-  options: {
-    minZoomSec: number
-    maxZoomSec: number
-    viewStartSec: number
-    viewEndSec: number
-    onViewportChange?: (startSec: number, endSec: number) => void
-  },
-) {
-  const shouldZoom = event.shiftKey || event.ctrlKey || event.metaKey
-
-  if (!shouldZoom || !options.onViewportChange) {
-    return
-  }
-
-  event.preventDefault()
-  const rect = event.currentTarget.getBoundingClientRect()
-  const ratio = clampNumber((event.clientX - rect.left) / rect.width, 0, 1)
-  const currentDuration = options.viewEndSec - options.viewStartSec
-  const factor = event.deltaY > 0 ? 1.14 : 0.86
-  const nextDuration = clampNumber(
-    snapToStep(currentDuration * factor),
-    options.minZoomSec,
-    options.maxZoomSec,
-  )
-  const anchorSec = options.viewStartSec + ratio * currentDuration
-  const nextStart = anchorSec - ratio * nextDuration
-  const next = clampWindow(nextStart, nextStart + nextDuration, nextDuration)
-  options.onViewportChange(next.startSec, next.endSec)
 }
 
 function clampWindow(startSec: number, endSec: number, duration: number) {

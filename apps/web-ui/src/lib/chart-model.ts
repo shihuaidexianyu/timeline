@@ -8,8 +8,34 @@ import type {
 } from '../api'
 
 const DAY_SECONDS = 24 * 60 * 60
-const APP_PALETTE = ['#4f7cff', '#0ea5a4', '#f59e0b', '#ef4444', '#8b5cf6', '#14b8a6']
-const DOMAIN_PALETTE = ['#2563eb', '#059669', '#d97706', '#7c3aed', '#dc2626', '#0891b2']
+const APP_PRESET_COLORS: string[] = [
+  '#2563eb',
+  '#dc2626',
+  '#16a34a',
+  '#d97706',
+  '#7c3aed',
+  '#0891b2',
+  '#be123c',
+  '#65a30d',
+  '#ea580c',
+  '#0f766e',
+  '#9333ea',
+  '#ca8a04',
+]
+const DOMAIN_PRESET_COLORS: string[] = [
+  '#1d4ed8',
+  '#b91c1c',
+  '#15803d',
+  '#c2410c',
+  '#6d28d9',
+  '#0f766e',
+  '#a21caf',
+  '#0369a1',
+  '#4d7c0f',
+  '#d97706',
+  '#be185d',
+  '#4338ca',
+]
 
 export type TooltipDatum = {
   x: number
@@ -96,34 +122,36 @@ export function buildDashboardModel(
     activeOnly ? activeIntervals : null,
     timeContext,
   )
+  const focusSegmentsWithColor = assignDistinctColors(focusSegments, 'app')
   const browserSegments = toBrowserChartSegments(
     timeline.browser_segments,
     activeOnly ? activeIntervals : null,
     timeContext,
   )
+  const browserSegmentsWithColor = assignDistinctColors(browserSegments, 'domain')
   const presenceSegments = toPresenceChartSegments(timeline.presence_segments, timeContext)
 
   return {
-    focusSegments,
-    browserSegments,
+    focusSegments: focusSegmentsWithColor,
+    browserSegments: browserSegmentsWithColor,
     presenceSegments,
-    appSlices: buildDonutSlices(focusSegments, 6),
-    domainSlices: buildDonutSlices(browserSegments, 6),
+    appSlices: buildDonutSlices(focusSegmentsWithColor, 6),
+    domainSlices: buildDonutSlices(browserSegmentsWithColor, 6),
     presenceSlices: buildDonutSlices(presenceSegments, 3),
     summary: {
-      focusSeconds: sumDurations(focusSegments),
+      focusSeconds: sumDurations(focusSegmentsWithColor),
       activeSeconds: sumDurations(
         presenceSegments.filter((segment) => segment.key === 'active'),
       ),
-      longestFocusSeconds: focusSegments.reduce(
+      longestFocusSeconds: focusSegmentsWithColor.reduce(
         (max, segment) => Math.max(max, segment.durationSec),
         0,
       ),
-      switchCount: Math.max(focusSegments.length - 1, 0),
+      switchCount: Math.max(focusSegmentsWithColor.length - 1, 0),
     },
     meta: {
-      focusCount: focusSegments.length,
-      browserCount: browserSegments.length,
+      focusCount: focusSegmentsWithColor.length,
+      browserCount: browserSegmentsWithColor.length,
       presenceCount: presenceSegments.length,
     },
   }
@@ -226,7 +254,7 @@ function toFocusChartSegments(
         startSec: range.startSec,
         endSec: range.endSec,
         durationSec: range.endSec - range.startSec,
-        color: colorForKey(segment.app.process_name, APP_PALETTE),
+        color: '',
         isBrowser: segment.app.is_browser,
       })
     })
@@ -258,7 +286,7 @@ function toBrowserChartSegments(
         startSec: range.startSec,
         endSec: range.endSec,
         durationSec: range.endSec - range.startSec,
-        color: colorForKey(segment.domain, DOMAIN_PALETTE),
+        color: '',
       })
     })
   }
@@ -446,9 +474,60 @@ function sumDurations(segments: ChartSegment[]) {
   return segments.reduce((sum, segment) => sum + segment.durationSec, 0)
 }
 
-function colorForKey(key: string, palette: string[]) {
-  const hash = Array.from(key).reduce((sum, character) => sum + character.charCodeAt(0), 0)
-  return palette[hash % palette.length]
+function assignDistinctColors(
+  segments: ChartSegment[],
+  namespace: 'app' | 'domain',
+) {
+  if (segments.length === 0) {
+    return segments
+  }
+
+  const totals = new Map<string, number>()
+  for (const segment of segments) {
+    totals.set(segment.key, (totals.get(segment.key) ?? 0) + segment.durationSec)
+  }
+
+  const orderedKeys = Array.from(totals.entries())
+    .sort((left, right) => {
+      if (right[1] !== left[1]) {
+        return right[1] - left[1]
+      }
+
+      return left[0].localeCompare(right[0])
+    })
+    .map(([key]) => key)
+
+  const palette = buildDistinctPalette(orderedKeys.length, namespace)
+  const colorByKey = new Map(
+    orderedKeys.map((key, index) => [key, palette[index] ?? palette[palette.length - 1]]),
+  )
+
+  return segments.map((segment) => ({
+    ...segment,
+    color: colorByKey.get(segment.key) ?? '#4f7cff',
+  }))
+}
+
+function buildDistinctPalette(count: number, namespace: 'app' | 'domain') {
+  const preset =
+    namespace === 'app' ? [...APP_PRESET_COLORS] : [...DOMAIN_PRESET_COLORS]
+
+  if (count <= preset.length) {
+    return preset.slice(0, count)
+  }
+
+  const generated = Array.from({ length: count - preset.length }, (_, index) =>
+    generatedDistinctColor(index, namespace),
+  )
+  return preset.concat(generated)
+}
+
+function generatedDistinctColor(index: number, namespace: 'app' | 'domain') {
+  const hueOffset = namespace === 'app' ? 18 : 42
+  const hue = Math.round((hueOffset + index * 137.508) % 360)
+  const saturation = 72 - (index % 3) * 6
+  const lightness = 46 + ((index + (namespace === 'app' ? 0 : 1)) % 2) * 8
+  return `hsl(${hue} ${saturation}% ${lightness}%)`
 }
 
 function presenceLabel(state: PresenceSegment['state']) {

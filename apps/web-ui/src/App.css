@@ -237,12 +237,6 @@
   margin-top: 14px;
 }
 
-.stats-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
-}
-
 .metric-card {
   display: flex;
   flex-direction: column;
@@ -1100,16 +1094,20 @@
   align-items: center;
   justify-content: center;
   border: 1px solid var(--input-border);
-  border-radius: 8px;
+  border-radius: 10px;
   background: #fff;
   color: var(--text-main);
   font-size: 1.1rem;
   cursor: pointer;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .calendar-nav-button:hover {
   background: #eff5ff;
   border-color: rgba(71, 110, 187, 0.36);
+  color: #21406d;
 }
 
 .calendar-grid {
@@ -1136,7 +1134,7 @@
   min-height: 64px;
   padding: 6px 7px;
   border: 1px solid rgba(145, 159, 180, 0.18);
-  border-radius: 8px;
+  border-radius: 10px;
   background: #fff;
   color: var(--text-main);
   text-align: left;
@@ -1233,8 +1231,7 @@
     flex-direction: column;
   }
 
-  .toolbar-grid,
-  .stats-summary-grid {
+  .toolbar-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
@@ -1242,7 +1239,6 @@
 @media (max-width: 840px) {
 
   .toolbar-grid,
-  .stats-summary-grid,
   .period-summary-grid,
   .stats-grid-lists {
     grid-template-columns: 1fr;

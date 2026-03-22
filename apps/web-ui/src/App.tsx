@@ -22,6 +22,7 @@ import {
   buildDashboardModel,
   formatClockRange,
   formatDuration,
+  todayString,
   type DashboardFilter,
   type DashboardModel,
   type DonutSlice,
@@ -105,9 +106,16 @@ function App() {
 
   useEffect(() => {
     let cancelled = false
-    void getMonthCalendar(calendarMonth).then((data) => {
-      if (!cancelled) setMonthCalendar(data)
-    })
+    void getMonthCalendar(calendarMonth)
+      .then((data) => {
+        if (!cancelled) setMonthCalendar(data)
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          console.warn('月历数据加载失败', err)
+          setMonthCalendar(null)
+        }
+      })
     return () => { cancelled = true }
   }, [calendarMonth, refreshToken])
 
@@ -168,11 +176,11 @@ function App() {
         </nav>
 
         <div className="sidebar-status">
-          <span>Agent</span>
+          <span>服务状态</span>
           <strong className={error ? 'status-error' : 'status-ok'}>
-            {error ? 'offline' : 'online'}
+            {error ? '离线' : '在线'}
           </strong>
-          <small>{lastUpdatedAt ? `updated ${lastUpdatedAt}` : 'waiting'}</small>
+          <small>{lastUpdatedAt ? `${lastUpdatedAt} 更新` : '等待连接'}</small>
         </div>
       </aside>
 
@@ -185,15 +193,11 @@ function App() {
           </div>
           <div className="activity-meta">
             <span>
-              <strong>Time active</strong>
-              {dashboard ? formatDuration(dashboard.summary.activeSeconds) : '--'}
-            </span>
-            <span>
-              <strong>Date</strong>
+              <strong>日期</strong>
               {selectedDate}
             </span>
             <span>
-              <strong>Timezone</strong>
+              <strong>时区</strong>
               {timeline?.timezone ?? '--'}
             </span>
           </div>
@@ -219,7 +223,7 @@ function App() {
             </label>
 
             <label className="toggle-card">
-              <span>active only</span>
+              <span>仅活跃时段</span>
               <button
                 type="button"
                 className={`toggle-button ${activeOnly ? 'is-active' : ''}`}
@@ -229,7 +233,7 @@ function App() {
                   setSelectedBrowserSegmentId(null)
                 }}
               >
-                {activeOnly ? 'On' : 'Off'}
+                {activeOnly ? '开启' : '关闭'}
               </button>
             </label>
 
@@ -246,9 +250,9 @@ function App() {
             <div className="status-card">
               <span>连接状态</span>
               <strong className={error ? 'status-error' : 'status-ok'}>
-                {error ? 'Agent offline' : 'Agent online'}
+                {error ? '服务离线' : '服务在线'}
               </strong>
-              <small>{lastUpdatedAt ? `updated ${lastUpdatedAt}` : 'waiting'}</small>
+              <small>{lastUpdatedAt ? `${lastUpdatedAt} 更新` : '等待连接'}</small>
             </div>
           </div>
         </section>
@@ -359,41 +363,26 @@ function StatsPage(props: {
 }) {
   return (
     <section className="page-stack">
-      {props.periodSummary ? (
-        <section className="period-summary-grid">
-          <PeriodCard
-            label="今日"
-            active={props.periodSummary.today.active_seconds}
-            focus={props.periodSummary.today.focus_seconds}
-          />
-          <PeriodCard
-            label="本周"
-            active={props.periodSummary.week.active_seconds}
-            focus={props.periodSummary.week.focus_seconds}
-          />
-          <PeriodCard
-            label="本月"
-            active={props.periodSummary.month.active_seconds}
-            focus={props.periodSummary.month.focus_seconds}
-          />
-        </section>
-      ) : (
-        <section className="stats-summary-grid">
-          <MetricCard label="Active time" value={formatDuration(props.dashboard.summary.activeSeconds)} />
-          <MetricCard label="Applications" value={`${props.dashboard.appSlices.length}`} />
-          <MetricCard label="Domains" value={`${props.dashboard.domainSlices.length}`} />
-          <MetricCard label="Presence states" value={`${props.dashboard.presenceSlices.length}`} />
-        </section>
-      )}
+      <section className="period-summary-grid">
+        <PeriodCard
+          label="今日"
+          active={props.periodSummary?.today.active_seconds ?? 0}
+          focus={props.periodSummary?.today.focus_seconds ?? 0}
+        />
+        <PeriodCard
+          label="本周"
+          active={props.periodSummary?.week.active_seconds ?? 0}
+          focus={props.periodSummary?.week.focus_seconds ?? 0}
+        />
+        <PeriodCard
+          label="本月"
+          active={props.periodSummary?.month.active_seconds ?? 0}
+          focus={props.periodSummary?.month.focus_seconds ?? 0}
+        />
+      </section>
 
       {props.monthCalendar ? (
         <div className="panel">
-          <div className="panel-header">
-            <div>
-              <p className="section-kicker">Calendar</p>
-              <h2>月度活跃日历</h2>
-            </div>
-          </div>
           <CalendarGrid
             month={props.calendarMonth}
             days={props.monthCalendar.days}
@@ -441,11 +430,11 @@ function StatsPage(props: {
 
       <section className="stats-grid stats-grid-lists">
         <div className="panel">
-          <RankingList title="Top Applications" slices={props.dashboard.appSlices} />
+          <RankingList title="应用排行" slices={props.dashboard.appSlices} />
         </div>
 
         <div className="panel">
-          <RankingList title="Top Domains" slices={props.dashboard.domainSlices} />
+          <RankingList title="域名排行" slices={props.dashboard.domainSlices} />
         </div>
       </section>
     </section>
@@ -476,7 +465,7 @@ function TimelinePage(props: {
       <div className="panel timeline-panel">
         <div className="panel-header">
           <div>
-            <p className="section-kicker">Timeline</p>
+            <p className="section-kicker">时间线</p>
             <h2>应用时间线</h2>
           </div>
           <div className="timeline-panel-actions">
@@ -573,7 +562,7 @@ function TimelinePage(props: {
       <div className="panel browser-detail-panel">
         <div className="panel-header">
           <div>
-            <p className="section-kicker">Browser</p>
+            <p className="section-kicker">浏览器</p>
             <h2>浏览器域名明细</h2>
           </div>
           {selectedBrowserSegment ? (
@@ -628,24 +617,24 @@ function SettingsPage(props: {
   return (
     <section className="page-stack settings-grid">
       <div className="panel settings-card">
-        <p className="section-kicker">Service</p>
+        <p className="section-kicker">服务</p>
         <h2>本地服务</h2>
         <dl className="settings-list">
           <div>
-            <dt>API endpoint</dt>
+            <dt>接口地址</dt>
             <dd>{API_BASE_URL}</dd>
           </div>
           <div>
-            <dt>Web UI</dt>
+            <dt>前端地址</dt>
             <dd>{props.agentSettings?.web_ui_url ?? '--'}</dd>
           </div>
           <div>
             <dt>连接状态</dt>
-            <dd>{props.error ? 'offline' : 'online'}</dd>
+            <dd>{props.error ? '离线' : '在线'}</dd>
           </div>
           <div>
             <dt>最后更新</dt>
-            <dd>{props.lastUpdatedAt ?? 'waiting'}</dd>
+            <dd>{props.lastUpdatedAt ?? '等待连接'}</dd>
           </div>
           <div>
             <dt>启动命令</dt>
@@ -655,7 +644,7 @@ function SettingsPage(props: {
       </div>
 
       <div className="panel settings-card">
-        <p className="section-kicker">Monitors</p>
+        <p className="section-kicker">监视器</p>
         <h2>监视器状态</h2>
         <div className="monitor-list">
           {props.agentSettings?.monitors.map((monitor) => (
@@ -666,7 +655,7 @@ function SettingsPage(props: {
               </div>
               <p>{monitor.detail}</p>
               <small>
-                {monitor.last_seen ? `last seen ${new Date(monitor.last_seen).toLocaleTimeString()}` : 'waiting for first heartbeat'}
+                {monitor.last_seen ? `最后活跃 ${new Date(monitor.last_seen).toLocaleTimeString()}` : '等待首次心跳'}
               </small>
             </article>
           )) ?? <div className="empty-card">正在读取监视器状态…</div>}
@@ -674,7 +663,7 @@ function SettingsPage(props: {
       </div>
 
       <div className="panel settings-card">
-        <p className="section-kicker">Startup</p>
+        <p className="section-kicker">启动</p>
         <h2>启动与当前视图</h2>
         <dl className="settings-list">
           <div>
@@ -689,16 +678,16 @@ function SettingsPage(props: {
                 }}
               >
                 {props.savingAutostart
-                  ? 'Saving...'
+                  ? '保存中…'
                   : props.agentSettings?.autostart_enabled
-                    ? 'Enabled'
-                    : 'Disabled'}
+                    ? '已启用'
+                    : '已禁用'}
               </button>
             </dd>
           </div>
           <div>
             <dt>托盘菜单</dt>
-            <dd>{props.agentSettings?.tray_enabled ? 'enabled' : 'disabled'}</dd>
+            <dd>{props.agentSettings?.tray_enabled ? '已启用' : '已禁用'}</dd>
           </div>
           <div>
             <dt>日期</dt>
@@ -709,8 +698,8 @@ function SettingsPage(props: {
             <dd>{props.timezone}</dd>
           </div>
           <div>
-            <dt>active only</dt>
-            <dd>{props.activeOnly ? 'enabled' : 'disabled'}</dd>
+            <dt>仅活跃时段</dt>
+            <dd>{props.activeOnly ? '已启用' : '已禁用'}</dd>
           </div>
         </dl>
 
@@ -720,22 +709,13 @@ function SettingsPage(props: {
   )
 }
 
-function MetricCard(props: { label: string; value: string }) {
-  return (
-    <article className="metric-card">
-      <span>{props.label}</span>
-      <strong>{props.value}</strong>
-    </article>
-  )
-}
-
 function PeriodCard(props: { label: string; active: number; focus: number }) {
   return (
     <article className="metric-card period-card">
       <span>{props.label}</span>
       <strong>{formatDuration(props.active)}</strong>
       <small className="period-card-detail">
-        Focus {formatDuration(props.focus)}
+        应用时长 {formatDuration(props.focus)}
       </small>
     </article>
   )
@@ -746,7 +726,7 @@ function RankingList(props: { title: string; slices: DonutSlice[] }) {
     <div className="ranking-card">
       <div className="panel-header">
         <div>
-          <p className="section-kicker">Ranking</p>
+          <p className="section-kicker">排行</p>
           <h2>{props.title}</h2>
         </div>
       </div>
@@ -777,7 +757,7 @@ function BrowserDomainList(props: {
     <div className="browser-domain-list">
       <div className="browser-domain-list-head">
         <div>
-          <p className="section-kicker">Domains</p>
+          <p className="section-kicker">域名</p>
           <h3>域名占比</h3>
         </div>
         <strong>{props.totalLabel}</strong>
@@ -860,7 +840,7 @@ function pageFromHash(hash: string): AppPage {
 function pageMeta(page: AppPage) {
   if (page === 'timeline') {
     return {
-      kicker: 'Timeline',
+      kicker: '时间线',
       title: '应用时间线',
       description: '按时间查看应用段、状态段，以及浏览器应用内部的域名明细。',
     }
@@ -868,14 +848,14 @@ function pageMeta(page: AppPage) {
 
   if (page === 'settings') {
     return {
-      kicker: 'Settings',
+      kicker: '设置',
       title: '本地设置',
       description: '查看当前连接、本地采集范围和当前视图参数。',
     }
   }
 
   return {
-    kicker: 'Statistics',
+    kicker: '统计',
     title: '统计概览',
     description: '查看应用、域名和状态分布，以及当天的聚合结果。',
   }
@@ -883,13 +863,6 @@ function pageMeta(page: AppPage) {
 
 function sumSlices(slices: DonutSlice[]) {
   return slices.reduce((sum, slice) => sum + slice.value, 0)
-}
-
-function todayString() {
-  const now = new Date()
-  const month = `${now.getMonth() + 1}`.padStart(2, '0')
-  const day = `${now.getDate()}`.padStart(2, '0')
-  return `${now.getFullYear()}-${month}-${day}`
 }
 
 function defaultTimelineViewport(date: string) {

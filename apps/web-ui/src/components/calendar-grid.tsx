@@ -2,9 +2,9 @@
 
 import { useMemo } from 'react'
 import type { DaySummary } from '../api'
-import { formatDuration } from '../lib/chart-model'
+import { formatDuration, todayString } from '../lib/chart-model'
 
-const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日']
 
 /** 5-tier heatmap colors from lightest to deepest blue. */
 const HEAT_CLASSES = [
@@ -135,10 +135,10 @@ function buildCalendarCells(month: string, days: DaySummary[]): CalendarCell[] {
 
     const tooltipLines = [dateStr]
     if (summary) {
-      tooltipLines.push(`Active: ${formatDuration(activeSeconds)}`)
-      tooltipLines.push(`Focus: ${formatDuration(summary.focus_seconds)}`)
-      if (topApp) tooltipLines.push(`Top app: ${topApp.label}`)
-      if (topDomain) tooltipLines.push(`Top domain: ${topDomain.label}`)
+      tooltipLines.push(`活跃: ${formatDuration(activeSeconds)}`)
+      tooltipLines.push(`应用: ${formatDuration(summary.focus_seconds)}`)
+      if (topApp) tooltipLines.push(`常用应用: ${topApp.label}`)
+      if (topDomain) tooltipLines.push(`常用域名: ${topDomain.label}`)
     }
 
     cells.push({
@@ -197,11 +197,4 @@ function shiftMonth(month: string, delta: number): string {
 function truncate(value: string, max: number) {
   if (value.length <= max) return value
   return `${value.slice(0, Math.max(max - 1, 1))}…`
-}
-
-function todayString() {
-  const now = new Date()
-  const month = `${now.getMonth() + 1}`.padStart(2, '0')
-  const day = `${now.getDate()}`.padStart(2, '0')
-  return `${now.getFullYear()}-${month}-${day}`
 }

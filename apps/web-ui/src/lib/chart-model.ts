@@ -340,7 +340,7 @@ function buildDonutSlices(segments: ChartSegment[], topN: number) {
     slices.push({
       id: 'slice-others',
       key: 'others',
-      label: 'Others',
+      label: '其他',
       value: otherValue,
       percentage: total === 0 ? 0 : (otherValue / total) * 100,
       color: '#94a3b8',
@@ -453,12 +453,12 @@ function colorForKey(key: string, palette: string[]) {
 
 function presenceLabel(state: PresenceSegment['state']) {
   if (state === 'active') {
-    return 'Active'
+    return '活跃'
   }
   if (state === 'idle') {
-    return 'Idle'
+    return '空闲'
   }
-  return 'Locked'
+  return '锁定'
 }
 
 function presenceColor(state: PresenceSegment['state']) {
@@ -469,4 +469,11 @@ function presenceColor(state: PresenceSegment['state']) {
     return '#64748b'
   }
   return '#334155'
+}
+
+export function todayString() {
+  const now = new Date()
+  const month = `${now.getMonth() + 1}`.padStart(2, '0')
+  const day = `${now.getDate()}`.padStart(2, '0')
+  return `${now.getFullYear()}-${month}-${day}`
 }

@@ -207,7 +207,7 @@ export function DonutChart(props: {
           left: PIE_CENTER_X,
           top: '53%',
           style: {
-            text: 'total',
+            text: '合计',
             fill: MUTED_COLOR,
             font: `13px ${MONO_FAMILY}`,
             textAlign: 'center',
@@ -232,7 +232,7 @@ export function DonutChart(props: {
     <div className="donut-card">
       <div className="panel-header">
         <div>
-          <p className="section-kicker">{props.filterKind}</p>
+          <p className="section-kicker">{props.filterKind === 'app' ? '应用' : '域名'}</p>
           <h2>{props.title}</h2>
         </div>
       </div>
@@ -310,7 +310,7 @@ function collapseSlices(slices: DonutSlice[], keepTopN: number) {
     {
       id: 'slice-others-collapsed',
       key: 'others',
-      label: 'Others',
+      label: '其他',
       value: otherValue,
       percentage: totalValue === 0 ? 0 : (otherValue / totalValue) * 100,
       color: '#94a3b8',

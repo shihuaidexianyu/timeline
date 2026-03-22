@@ -491,17 +491,48 @@
   font-size: 0.68rem;
 }
 
+.weekly-chart-shell {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.weekly-chart-main {
+  position: relative;
+  min-height: 192px;
+  padding-top: 8px;
+}
+
+.weekly-grid-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed rgba(145, 159, 180, 0.22);
+  pointer-events: none;
+}
+
 .weekly-bars {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 8px;
+  gap: 10px;
   align-items: end;
-  min-height: 176px;
+  min-height: 184px;
+}
+
+.weekly-axis {
+  display: grid;
+  align-content: space-between;
+  justify-items: start;
+  min-height: 184px;
+  padding-bottom: 22px;
 }
 
 .weekly-bar-column {
   display: grid;
-  gap: 6px;
+  gap: 10px;
   justify-items: center;
   padding: 0;
   border: none;
@@ -511,11 +542,11 @@
 }
 
 .weekly-bar-column:hover .weekly-bar-track {
-  background: rgba(215, 226, 246, 0.95);
+  background: rgba(215, 221, 231, 0.96);
 }
 
 .weekly-bar-column:focus-visible .weekly-bar-track {
-  background: rgba(226, 236, 255, 1);
+  background: rgba(226, 232, 241, 1);
   box-shadow: 0 0 0 3px rgba(47, 111, 219, 0.18);
 }
 
@@ -524,18 +555,13 @@
   font-weight: 700;
 }
 
-.weekly-bar-column.is-selected .weekly-bar-value {
-  color: #2450a0;
-  font-weight: 700;
-}
-
 .weekly-bar-track {
   position: relative;
   width: 100%;
-  max-width: 28px;
-  height: 108px;
-  border-radius: 999px;
-  background: rgba(225, 232, 246, 0.8);
+  max-width: 34px;
+  height: 148px;
+  border-radius: 18px;
+  background: rgba(83, 93, 110, 0.18);
   overflow: hidden;
 }
 
@@ -544,7 +570,7 @@
   left: 0;
   right: 0;
   bottom: 0;
-  border-radius: 999px;
+  border-radius: 14px 14px 0 0;
   background: linear-gradient(180deg, #8b7dff, #6a59e5);
 }
 
@@ -552,12 +578,19 @@
   background: linear-gradient(180deg, #43d6b0, #21b38d);
 }
 
-.weekly-bar-value,
-.weekly-bar-day {
+.weekly-bar-day,
+.weekly-axis-label {
   color: var(--text-dim);
   font-family: var(--mono-family);
   font-size: 0.62rem;
+}
+
+.weekly-bar-day {
   text-align: center;
+}
+
+.weekly-axis-label {
+  white-space: nowrap;
 }
 
 .weekly-selection-note {

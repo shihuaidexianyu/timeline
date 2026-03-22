@@ -802,31 +802,52 @@ function WeeklyBarChart(props: {
     ),
     1,
   )
+  const axisMaxValue = niceWeeklyAxisMax(maxValue)
+  const axisTicks = [axisMaxValue, axisMaxValue / 2, 0]
 
   return (
-    <div className="weekly-bars">
-      {props.bars.map((bar) => {
-        const value =
-          props.metric === 'active' ? bar.activeSeconds : bar.focusSeconds
-        const barHeight = `${Math.max((value / maxValue) * 100, value > 0 ? 12 : 0)}%`
-        const valueLabel = formatDuration(value)
+    <div className="weekly-chart-shell">
+      <div className="weekly-chart-main">
+        {axisTicks.map((tick) => (
+          <span
+            key={tick}
+            className="weekly-grid-line"
+            style={{ bottom: `${axisMaxValue === 0 ? 0 : (tick / axisMaxValue) * 100}%` }}
+          />
+        ))}
 
-        return (
-          <button
-            key={bar.date}
-            type="button"
-            className={`weekly-bar-column ${bar.isSelected ? 'is-selected' : ''} is-${props.metric}`}
-            onClick={() => props.onSelectDate(bar.date)}
-            title={`${bar.date} ${props.metric === 'active' ? '活跃' : '应用'} ${valueLabel}`}
-          >
-            <div className="weekly-bar-track">
-              <div className="weekly-bar" style={{ height: barHeight }} />
-            </div>
-            <span className="weekly-bar-value">{valueLabel}</span>
-            <span className="weekly-bar-day">{bar.dayLabel}</span>
-          </button>
-        )
-      })}
+        <div className="weekly-bars">
+          {props.bars.map((bar) => {
+            const value =
+              props.metric === 'active' ? bar.activeSeconds : bar.focusSeconds
+            const barHeight = `${Math.max((value / axisMaxValue) * 100, value > 0 ? 10 : 0)}%`
+            const valueLabel = formatDuration(value)
+
+            return (
+              <button
+                key={bar.date}
+                type="button"
+                className={`weekly-bar-column ${bar.isSelected ? 'is-selected' : ''} is-${props.metric}`}
+                onClick={() => props.onSelectDate(bar.date)}
+                title={`${bar.date} ${props.metric === 'active' ? '活跃' : '应用'} ${valueLabel}`}
+              >
+                <div className="weekly-bar-track">
+                  <div className="weekly-bar" style={{ height: barHeight }} />
+                </div>
+                <span className="weekly-bar-day">{bar.dayLabel}</span>
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="weekly-axis">
+        {axisTicks.map((tick) => (
+          <span key={`label-${tick}`} className="weekly-axis-label">
+            {formatWeeklyAxisTick(tick)}
+          </span>
+        ))}
+      </div>
     </div>
   )
 }
@@ -1381,6 +1402,29 @@ function buildWeekSeries(days: DaySummary[], selectedDate: string): WeekBarDatum
 
 function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`
+}
+
+function niceWeeklyAxisMax(seconds: number) {
+  const hours = seconds / 3600
+
+  if (hours <= 2) {
+    return 2 * 3600
+  }
+  if (hours <= 4) {
+    return 4 * 3600
+  }
+  if (hours <= 6) {
+    return 6 * 3600
+  }
+  if (hours <= 8) {
+    return 8 * 3600
+  }
+
+  return Math.ceil(hours / 4) * 4 * 3600
+}
+
+function formatWeeklyAxisTick(seconds: number) {
+  return `${Math.round(seconds / 3600)} 小时`
 }
 
 function formatZoomPreset(hours: number) {

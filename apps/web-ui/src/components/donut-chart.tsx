@@ -259,6 +259,162 @@ export function DonutChart(props: {
   )
 }
 
+export function CompactDonutChart(props: {
+  slices: DonutSlice[]
+  totalLabel: string
+  secondaryLabel: string
+  footerLabel?: string
+  selectedKey?: string | null
+  onSelectKey?: (key: string) => void
+  emptyLabel?: string
+  height?: number
+}) {
+  const displaySlices = useMemo(
+    () => props.slices.filter((slice) => slice.value > 0),
+    [props.slices],
+  )
+
+  const option = useMemo<echarts.EChartsOption>(() => {
+    return {
+      animation: false,
+      tooltip: {
+        trigger: 'item',
+        appendToBody: true,
+        backgroundColor: 'rgba(255, 255, 255, 0.98)',
+        borderColor: 'rgba(145, 159, 180, 0.28)',
+        borderWidth: 1,
+        textStyle: {
+          color: LABEL_COLOR,
+          fontFamily: MONO_FAMILY,
+        },
+        formatter: (params) => {
+          const slice = getSliceDatum(params)
+          if (!slice) {
+            return ''
+          }
+
+          return [
+            `<div style="min-width:180px">`,
+            `<div style="font-weight:600;margin-bottom:6px">${escapeHtml(slice.label)}</div>`,
+            `<div>${escapeHtml(formatDuration(slice.value))}</div>`,
+            `<div>${slice.percentage.toFixed(1)}%</div>`,
+            `</div>`,
+          ].join('')
+        },
+      },
+      series: [
+        {
+          type: 'pie',
+          radius: ['58%', '78%'],
+          center: ['50%', '50%'],
+          avoidLabelOverlap: true,
+          label: { show: false },
+          labelLine: { show: false },
+          itemStyle: {
+            borderColor: '#f7faff',
+            borderWidth: 1,
+          },
+          emphasis: {
+            scale: true,
+            scaleSize: 8,
+          },
+          data: displaySlices.map((slice) => {
+            const isActive = props.selectedKey === slice.key
+            const shouldDim = props.selectedKey !== null && props.selectedKey !== undefined && !isActive
+
+            return {
+              value: slice.value,
+              name: slice.label,
+              raw: slice,
+              selected: isActive,
+              selectedOffset: 8,
+              itemStyle: {
+                color: slice.color,
+                opacity: shouldDim ? 0.24 : 0.96,
+                cursor: props.onSelectKey ? 'pointer' : 'default',
+              },
+            }
+          }),
+        },
+      ],
+      graphic: [
+        {
+          type: 'text',
+          left: 'center',
+          top: props.footerLabel ? '39%' : '42%',
+          style: {
+            text: props.totalLabel,
+            fill: LABEL_COLOR,
+            font: `600 17px ${MONO_FAMILY}`,
+            textAlign: 'center',
+          },
+        },
+        {
+          type: 'text',
+          left: 'center',
+          top: props.footerLabel ? '50%' : '54%',
+          style: {
+            text: props.secondaryLabel,
+            fill: MUTED_COLOR,
+            font: `12px ${MONO_FAMILY}`,
+            textAlign: 'center',
+          },
+        },
+        ...(props.footerLabel
+          ? [
+              {
+                type: 'text' as const,
+                left: 'center',
+                top: '59%',
+                style: {
+                  text: props.footerLabel,
+                  fill: MUTED_COLOR,
+                  font: `11px ${MONO_FAMILY}`,
+                  textAlign: 'center',
+                },
+              },
+            ]
+          : []),
+      ],
+    }
+  }, [
+    displaySlices,
+    props.footerLabel,
+    props.onSelectKey,
+    props.secondaryLabel,
+    props.selectedKey,
+    props.totalLabel,
+  ])
+
+  if (displaySlices.length === 0) {
+    return <div className="empty-card">{props.emptyLabel ?? '没有可展示的数据'}</div>
+  }
+
+  return (
+    <ReactECharts
+      option={option}
+      notMerge
+      lazyUpdate
+      opts={{ renderer: 'svg' }}
+      onEvents={
+        props.onSelectKey
+          ? {
+              click: (params: unknown) => {
+                const slice = getSliceDatum(params)
+                if (!slice) {
+                  return
+                }
+
+                props.onSelectKey?.(slice.key)
+              },
+            }
+          : undefined
+      }
+      style={{ height: props.height ?? 220, width: '100%' }}
+    />
+  )
+}
+
 function getSliceDatum(params: unknown) {
   if (!params || typeof params !== 'object' || !('data' in params)) {
     return null

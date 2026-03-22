@@ -16,7 +16,7 @@ import {
   type TimelineDayResponse,
 } from './api'
 import { CalendarGrid } from './components/calendar-grid'
-import { DonutChart } from './components/donut-chart'
+import { CompactDonutChart, DonutChart } from './components/donut-chart'
 import { TimelineChart } from './components/timeline-chart'
 import {
   buildBrowserDetailModel,
@@ -543,20 +543,24 @@ function DailySnapshotCard(props: {
 
       <p className="showcase-copy">围绕所选日期，快速查看活跃时长、切换频率和最常出现的上下文。</p>
 
-      <div className="showcase-orb-wrap">
-        <UsageOrbit
-          slices={appSlices}
-          primaryLabel={formatDuration(props.dashboard.summary.activeSeconds)}
-          secondaryLabel="活跃时长"
-          selectedKey={props.appFilter?.kind === 'app' ? props.appFilter.key : null}
-          onSelect={(key) => {
-            props.onSelectApp(
-              props.appFilter?.kind === 'app' && props.appFilter.key === key
-                ? null
-                : { kind: 'app', key },
-            )
-          }}
-        />
+      <div className="showcase-donut-wrap">
+        <div className="showcase-compact-donut">
+          <CompactDonutChart
+            slices={appSlices}
+            totalLabel={formatDuration(props.dashboard.summary.activeSeconds)}
+            secondaryLabel="活跃时长"
+            selectedKey={props.appFilter?.kind === 'app' ? props.appFilter.key : null}
+            onSelectKey={(key) => {
+              props.onSelectApp(
+                props.appFilter?.kind === 'app' && props.appFilter.key === key
+                  ? null
+                  : { kind: 'app', key },
+              )
+            }}
+            height={232}
+            emptyLabel="所选日期没有可展示的应用分布"
+          />
+        </div>
       </div>
 
       <div className="showcase-stat-grid">
@@ -693,6 +697,33 @@ function FocusBalanceCard(props: {
       : selectedPresenceKey === 'idle'
         ? props.idleSeconds
         : props.lockedSeconds
+  const presenceTotal = props.activeSeconds + props.idleSeconds + props.lockedSeconds
+  const presenceSlices: DonutSlice[] = [
+    {
+      id: 'presence-active',
+      key: 'active',
+      label: '活跃',
+      value: props.activeSeconds,
+      percentage: presenceTotal === 0 ? 0 : (props.activeSeconds / presenceTotal) * 100,
+      color: '#2f6fdb',
+    },
+    {
+      id: 'presence-idle',
+      key: 'idle',
+      label: '空闲',
+      value: props.idleSeconds,
+      percentage: presenceTotal === 0 ? 0 : (props.idleSeconds / presenceTotal) * 100,
+      color: '#43d6b0',
+    },
+    {
+      id: 'presence-locked',
+      key: 'locked',
+      label: '锁定',
+      value: props.lockedSeconds,
+      percentage: presenceTotal === 0 ? 0 : (props.lockedSeconds / presenceTotal) * 100,
+      color: '#8b7dff',
+    },
+  ]
 
   return (
     <article className="showcase-card showcase-card-focus">
@@ -704,16 +735,26 @@ function FocusBalanceCard(props: {
       </div>
 
       <p className="focus-card-copy">
-        用专注环看活跃与应用时长的贴合程度，并快速确认这一天被多少应用片段占据。
+        用状态环查看活跃、空闲和锁定分布，再和当天的应用时长快速对照。
       </p>
 
-      <div className="focus-dial-wrap">
-        <FocusDial
-          activeSeconds={props.dashboard.summary.activeSeconds}
-          focusSeconds={props.dashboard.summary.focusSeconds}
-          selectedLabel={selectedPresenceLabel}
-          selectedValue={selectedPresenceValue}
-        />
+      <div className="showcase-donut-wrap">
+        <div className="showcase-compact-donut">
+          <CompactDonutChart
+            slices={presenceSlices}
+            totalLabel={formatDuration(selectedPresenceValue)}
+            secondaryLabel={selectedPresenceLabel}
+            footerLabel={`应用 ${formatDuration(props.dashboard.summary.focusSeconds)}`}
+            selectedKey={selectedPresenceKey}
+            onSelectKey={(key) => {
+              if (key === 'active' || key === 'idle' || key === 'locked') {
+                setSelectedPresenceKey(key)
+              }
+            }}
+            height={232}
+            emptyLabel="所选日期没有状态分布数据"
+          />
+        </div>
       </div>
 
       <div className="focus-footnote">{appCount} 个应用被记录</div>
@@ -753,161 +794,6 @@ function FocusBalanceCard(props: {
         </button>
       </div>
     </article>
-  )
-}
-
-function UsageOrbit(props: {
-  slices: DonutSlice[]
-  primaryLabel: string
-  secondaryLabel: string
-  selectedKey: string | null
-  onSelect: (key: string) => void
-}) {
-  const size = 182
-  const radius = 60
-  const circumference = 2 * Math.PI * radius
-  const visibleSlices = props.slices.filter((slice) => slice.value > 0)
-  const total = visibleSlices.reduce((sum, slice) => sum + slice.value, 0)
-  let consumed = 0
-
-  return (
-    <svg
-      className="usage-orbit"
-      viewBox={`0 0 ${size} ${size}`}
-      role="img"
-      aria-label={`${props.secondaryLabel} ${props.primaryLabel}`}
-    >
-      <circle
-        cx={size / 2}
-        cy={size / 2}
-        r={radius + 14}
-        fill="none"
-        stroke="rgba(79, 124, 255, 0.08)"
-        strokeWidth="12"
-      />
-      <circle
-        cx={size / 2}
-        cy={size / 2}
-        r={radius}
-        fill="none"
-        stroke="rgba(79, 124, 255, 0.08)"
-        strokeWidth="14"
-      />
-      {visibleSlices.map((slice) => {
-        const segmentLength = total > 0 ? (slice.value / total) * circumference : 0
-        const dash = Math.max(segmentLength - 5, 0)
-        const offset = -consumed
-        consumed += segmentLength
-        const isSelected = props.selectedKey === slice.key
-
-        return (
-          <circle
-            key={slice.id}
-            cx={size / 2}
-            cy={size / 2}
-            r={radius}
-            fill="none"
-            stroke={slice.color}
-            strokeWidth={isSelected ? '18' : '14'}
-            strokeLinecap="round"
-            strokeDasharray={`${dash} ${circumference}`}
-            strokeDashoffset={offset}
-            transform={`rotate(-90 ${size / 2} ${size / 2})`}
-            className={`usage-orbit-segment ${isSelected ? 'is-selected' : ''}`}
-            tabIndex={0}
-            role="button"
-            aria-label={`${slice.label} ${formatDuration(slice.value)}`}
-            onClick={() => props.onSelect(slice.key)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' || event.key === ' ') {
-                event.preventDefault()
-                props.onSelect(slice.key)
-              }
-            }}
-          />
-        )
-      })}
-      <circle cx={size / 2} cy={size / 2} r={44} fill="rgba(255,255,255,0.96)" />
-      <text x="50%" y="48%" textAnchor="middle" className="usage-orbit-primary">
-        {props.primaryLabel}
-      </text>
-      <text x="50%" y="59%" textAnchor="middle" className="usage-orbit-secondary">
-        {props.secondaryLabel}
-      </text>
-    </svg>
-  )
-}
-
-function FocusDial(props: {
-  activeSeconds: number
-  focusSeconds: number
-  selectedLabel: string
-  selectedValue: number
-}) {
-  const size = 198
-  const radius = 64
-  const circumference = 2 * Math.PI * radius
-  const denominator = Math.max(props.focusSeconds, props.activeSeconds, 1)
-  const progress = props.activeSeconds / denominator
-  const dash = circumference * progress
-  const ticks = Array.from({ length: 12 }, (_, index) => index)
-
-  return (
-    <svg
-      className="focus-dial"
-      viewBox={`0 0 ${size} ${size}`}
-      role="img"
-      aria-label={`活跃 ${formatDuration(props.activeSeconds)}，应用 ${formatDuration(props.focusSeconds)}`}
-    >
-      {ticks.map((tick) => {
-        const angle = (tick / ticks.length) * Math.PI * 2 - Math.PI / 2
-        const x1 = size / 2 + Math.cos(angle) * 84
-        const y1 = size / 2 + Math.sin(angle) * 84
-        const x2 = size / 2 + Math.cos(angle) * 90
-        const y2 = size / 2 + Math.sin(angle) * 90
-        return (
-          <line
-            key={tick}
-            x1={x1}
-            y1={y1}
-            x2={x2}
-            y2={y2}
-            stroke="rgba(47, 111, 219, 0.55)"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-        )
-      })}
-      <circle
-        cx={size / 2}
-        cy={size / 2}
-        r={radius}
-        fill="none"
-        stroke="rgba(79, 124, 255, 0.08)"
-        strokeWidth="12"
-      />
-      <circle
-        cx={size / 2}
-        cy={size / 2}
-        r={radius}
-        fill="none"
-        stroke="#2f6fdb"
-        strokeWidth="12"
-        strokeLinecap="round"
-        strokeDasharray={`${dash} ${circumference}`}
-        transform={`rotate(-90 ${size / 2} ${size / 2})`}
-      />
-      <circle cx={size / 2} cy={size / 2} r={46} fill="rgba(255,255,255,0.98)" />
-      <text x="50%" y="48%" textAnchor="middle" className="focus-dial-primary">
-        {formatDuration(props.activeSeconds)}
-      </text>
-      <text x="50%" y="58%" textAnchor="middle" className="focus-dial-secondary">
-        应用 {formatDuration(props.focusSeconds)}
-      </text>
-      <text x="50%" y="67%" textAnchor="middle" className="focus-dial-tertiary">
-        {props.selectedLabel} {formatDuration(props.selectedValue)}
-      </text>
-    </svg>
   )
 }
 

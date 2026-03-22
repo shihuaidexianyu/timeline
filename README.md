@@ -1,46 +1,63 @@
 # timeline
 
-![alt text](assets/1.png)
-![alt text](assets/2.png)
-Windows 本地个人注意力时间线系统。
+![timeline screenshot 1](assets/1.png)
+![timeline screenshot 2](assets/2.png)
 
-这个仓库当前实现的是 MVP 基础骨架，目标是先把本地采集、SQLite 存储、本地 HTTP API、Web UI 和浏览器扩展通信这条最小闭环跑通，再逐步补齐更细的分析能力。
+一个面向 Windows 的本地个人活动时间线工具。
 
-## 当前技术方案
+它的目标很简单：在本机采集前台应用、浏览器域名和活跃状态，写入本地 SQLite，再通过本地 Web UI 把一天的时间都去了哪里展示出来。
 
-- `apps/timeline-agent`：Rust 本地常驻服务，负责采集、存储和提供 HTTP API
-- `apps/web-ui`：React + Vite 的本地网页前端
-- `apps/browser-extension`：Edge / Chrome 通用的 Manifest V3 扩展
-- `crates/common`：本地服务与前端共享的数据协议
-- `docs/`：架构、API、数据表和后续设计说明
+## 组件结构
 
-## 已完成的基础能力
+- `apps/timeline-agent`
+  Rust 本地常驻服务。负责 Windows 采集、SQLite 存储、本地 HTTP API、托盘、自启动设置。
+- `apps/web-ui`
+  React + Vite 本地前端。负责时间线、统计图和设置页。
+- `apps/browser-extension`
+  Edge / Chrome 通用的 Manifest V3 扩展。负责把当前活动标签页域名上报给本地服务。
+- `crates/common`
+  agent、前端、扩展共享的数据结构。
+- `docs/`
+  架构、接口和数据模型说明。
 
-- Rust + Tokio + Axum + SQLite 的本地服务骨架
-- TOML 配置加载、结构化日志、单实例锁
-- SQLite 初始化、索引和简单 migration 机制
-- Windows 前台窗口轮询采集
-- `active / idle / locked` 状态检测与 `presence_segments`
-- 浏览器扩展通过本地 HTTP 上报域名事件
-- 每日时间线、应用统计、域名统计、专注统计 API
-- 中文 Web 仪表盘，支持日期选择和时间线查看
+## 当前能力
 
-## 快速启动
+- 采集前台应用、进程名、窗口标题
+- 采集 `active / idle / locked` 状态
+- 接收浏览器扩展上报的域名活动
+- 写入本地 SQLite
+- 提供每日时间线、应用统计、域名统计、专注统计 API
+- 提供本地 Web UI
+- 提供系统托盘入口
+- 支持开机自启动开关
 
-### 1. 启动本地服务
+## 隐私边界
+
+- 默认只记录应用名、进程信息、窗口标题、域名和活跃状态
+- 默认不记录页面正文、输入内容、剪贴板和截图
+- 数据默认只保存在本地 SQLite
+- 本地 HTTP API 默认只允许 loopback 来源的浏览器访问
+
+## 开发运行
+
+### 1. 启动 agent
 
 ```powershell
 cargo run -p timeline-agent
 ```
 
-可选配置文件路径：
+如果要显式指定配置文件：
 
 ```powershell
 cargo run -p timeline-agent -- --config config/timeline-agent.toml
 ```
 
-默认会把数据库写到 `data/timeline.sqlite`，监听 `127.0.0.1:46215`。
-如果配置文件放在 `config\` 目录下，配置里的相对路径建议写成 `../data/...` 这类“相对于配置文件目录”的形式。
+默认监听地址是 `127.0.0.1:46215`。
+
+注意：
+
+- 如果配置文件放在 `config\` 目录下，配置里的相对路径应按“相对于配置文件目录”来写
+- 示例配置里数据库路径使用 `../data/...`，就是为了匹配这个规则
 
 ### 2. 启动前端
 
@@ -50,41 +67,66 @@ npm install
 npm run dev
 ```
 
-开发环境默认从 `http://127.0.0.1:46215` 读取本地 API。
+开发模式下，前端默认读取 `http://127.0.0.1:46215`。
+
+可选环境变量：
+
+- `VITE_API_BASE_URL`
+  显式指定本地 agent API 地址
 
 ### 3. 加载浏览器扩展
 
-浏览器扩展目录在 `apps/browser-extension`。
+扩展目录在 `apps/browser-extension`。
 
-- Edge：打开 `edge://extensions`
-- Chrome：打开 `chrome://extensions`
-- 开启开发者模式
-- 选择“加载已解压的扩展程序”
-- 指向 `apps/browser-extension`
+加载方式：
 
-如果你把 agent 改到了非默认 loopback 端口，先打开一次自托管仪表盘，扩展会自动记住当前本地地址。
+1. 打开 `edge://extensions` 或 `chrome://extensions`
+2. 开启开发者模式
+3. 选择“加载已解压的扩展程序”
+4. 指向 `apps/browser-extension`
 
-## 关键隐私边界
+补充说明：
 
-- 默认仅记录应用名、进程信息、窗口标题、域名和活跃状态
-- 默认不记录页面正文、输入内容、剪贴板和截图
-- 所有数据默认只保存在本地 SQLite
+- 扩展会记住最近一次成功连接的本地 agent 地址
+- 如果你把 agent 改到了非默认 loopback 端口，先打开一次自托管仪表盘，扩展会自动学习当前地址
 
-## 打包便携包
+## 配置
 
-当前仓库只提供 Windows 便携包打包脚本，生成一个“解压后可直接运行”的 zip 包。
+示例配置在 [config/timeline-agent.example.toml](config/timeline-agent.example.toml)。
 
-另外，仓库已经提供 GitHub Actions 工作流：
+当前主要配置项：
 
-- 手动触发
-- 发布 GitHub Release 时自动触发
-- Release 触发时会把便携包 `.zip` 自动挂到当前 Release 的 assets
+- `database_path`
+  SQLite 文件路径
+- `lockfile_path`
+  单实例锁文件路径
+- `listen_addr`
+  本地 HTTP 服务监听地址
+- `web_ui_url`
+  托盘和设置页里展示的 Web UI 地址
+- `idle_threshold_secs`
+  多久无输入后判定为 idle
+- `tray_enabled`
+  是否启用系统托盘
+- `record_window_titles`
+  是否记录窗口标题
+- `record_page_titles`
+  是否记录页面标题
+- `ignored_apps`
+  忽略的应用进程名列表
+- `ignored_domains`
+  忽略的域名列表
+
+## 打包便携版
+
+仓库当前只保留便携包产物，不再生成安装器。
 
 ### 前置条件
 
 1. 安装 Node.js / npm
 2. 安装 Rust toolchain
-### 构建打包产物
+
+### 构建命令
 
 ```powershell
 .\scripts\build-portable.ps1
@@ -93,18 +135,54 @@ npm run dev
 脚本会自动完成：
 
 1. 构建 `apps/web-ui/dist`
-2. 构建静态 CRT 的 `timeline-agent.exe`
+2. 构建 `timeline-agent.exe`
 3. 收集浏览器扩展目录
-4. 生成一个可直接运行的便携包
+4. 生成便携版 zip 包
 
-输出目录：
+输出位置：
 
-- 便携包：`target\portable\output\timeline-portable-<version>.zip`
+- `target\portable\output\timeline-portable-<version>.zip`
 
-### 便携版布局
+### 便携包布局
 
-- 解压后优先双击 `start-timeline.vbs`，不会弹出终端窗口
-- `start-timeline.cmd` 保留为兼容启动方式
-- 默认使用包内的 `config\timeline-agent.toml`
-- 默认把数据库写到包内的 `data\`
-- 包内自带前端静态文件和浏览器扩展目录
+- `timeline-agent.exe`
+- `config\timeline-agent.toml`
+- `data\`
+- `web-ui\dist\`
+- `browser-extension\`
+
+便携包不再额外生成启动脚本，直接运行 `timeline-agent.exe` 即可。
+
+## GitHub Actions
+
+仓库自带 Windows 打包工作流：
+
+- 支持手动触发
+- 在 GitHub Release 发布时自动触发
+- Release 场景会把便携版 `.zip` 挂到 Release assets
+
+## 常见说明
+
+### `StartMenuExperienceHost.exe` 是什么
+
+这是 Windows 的开始菜单宿主进程，属于系统组件。
+
+### 为什么会出现跨关机的 active 段
+
+旧数据里如果出现“关机期间仍然是 active”的长段，通常不是实时识别把关机误判成 active，而是历史上某次未正常收尾的 open segment 在下次启动时被错误补尾造成的。
+
+当前代码已经改成按“最后一次真实观测时间”收尾，新生成的数据不会再把关机空档桥接进去。
+
+## 目录参考
+
+```text
+timeline/
+├─ apps/
+│  ├─ browser-extension/
+│  ├─ timeline-agent/
+│  └─ web-ui/
+├─ config/
+├─ crates/
+├─ docs/
+└─ scripts/
+```

@@ -142,43 +142,6 @@ ignored_domains = []
 
 Set-Content -Path (Join-Path $portableConfigDir 'timeline-agent.toml') -Value $portableConfig -Encoding UTF8
 
-$startCmd = @'
-@echo off
-setlocal
-cd /d "%~dp0"
-start "" "%~dp0timeline-agent.exe" --config "%~dp0config\timeline-agent.toml"
-timeout /t 2 /nobreak >nul
-start "" "http://127.0.0.1:46215/#/stats"
-endlocal
-'@
-
-Set-Content -Path (Join-Path $portableStage 'start-timeline.cmd') -Value $startCmd -Encoding ASCII
-
-$startVbs = @'
-Set shell = CreateObject("WScript.Shell")
-Set fso = CreateObject("Scripting.FileSystemObject")
-appDir = fso.GetParentFolderName(WScript.ScriptFullName)
-shell.Run """" & appDir & "\timeline-agent.exe"" --config """ & appDir & "\config\timeline-agent.toml""", 0, False
-WScript.Sleep 2000
-shell.Run "http://127.0.0.1:46215/#/stats", 0, False
-'@
-
-Set-Content -Path (Join-Path $portableStage 'start-timeline.vbs') -Value $startVbs -Encoding ASCII
-
-$openDashboardCmd = @'
-@echo off
-start "" "http://127.0.0.1:46215/#/stats"
-'@
-
-Set-Content -Path (Join-Path $portableStage 'open-dashboard.cmd') -Value $openDashboardCmd -Encoding ASCII
-
-$openDashboardVbs = @'
-Set shell = CreateObject("WScript.Shell")
-shell.Run "http://127.0.0.1:46215/#/stats", 0, False
-'@
-
-Set-Content -Path (Join-Path $portableStage 'open-dashboard.vbs') -Value $openDashboardVbs -Encoding ASCII
-
 $portableZip = Join-Path $outputRoot "timeline-portable-$packageVersion.zip"
 Remove-Item -Path $portableZip -Force -ErrorAction SilentlyContinue
 Compress-Archive -Path (Join-Path $portableStage '*') -DestinationPath $portableZip

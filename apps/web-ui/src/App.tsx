@@ -33,6 +33,7 @@ const PAGE_ITEMS = [
 type AppPage = (typeof PAGE_ITEMS)[number]['id']
 
 function App() {
+  const defaultTimelineWindow = defaultTimelineViewport(todayString())
   const [page, setPage] = useHashPage()
   const [selectedDate, setSelectedDate] = useState(() => todayString())
   const [timeline, setTimeline] = useState<TimelineDayResponse | null>(null)
@@ -47,8 +48,8 @@ function App() {
   const [appFilter, setAppFilter] = useState<DashboardFilter>(null)
   const [domainFilter, setDomainFilter] = useState<DashboardFilter>(null)
   const [selectedBrowserSegmentId, setSelectedBrowserSegmentId] = useState<string | null>(null)
-  const [zoomHours, setZoomHours] = useState<number>(MAX_ZOOM_HOURS)
-  const [viewStartHour, setViewStartHour] = useState(0)
+  const [zoomHours, setZoomHours] = useState<number>(defaultTimelineWindow.zoomHours)
+  const [viewStartHour, setViewStartHour] = useState(defaultTimelineWindow.viewStartHour)
 
   useEffect(() => {
     let cancelled = false
@@ -189,8 +190,11 @@ function App() {
                 value={selectedDate}
                 onChange={(event) => {
                   const nextDate = event.target.value
+                  const nextWindow = defaultTimelineViewport(nextDate)
                   startTransition(() => {
                     setSelectedDate(nextDate)
+                    setZoomHours(nextWindow.zoomHours)
+                    setViewStartHour(nextWindow.viewStartHour)
                   })
                 }}
               />
@@ -799,6 +803,24 @@ function todayString() {
   const month = `${now.getMonth() + 1}`.padStart(2, '0')
   const day = `${now.getDate()}`.padStart(2, '0')
   return `${now.getFullYear()}-${month}-${day}`
+}
+
+function defaultTimelineViewport(date: string) {
+  const zoomHours = 0.5
+  const now = new Date()
+
+  if (date === todayString()) {
+    const currentHour = now.getHours() + now.getMinutes() / 60
+    return {
+      zoomHours,
+      viewStartHour: clampViewStart(currentHour - zoomHours, zoomHours),
+    }
+  }
+
+  return {
+    zoomHours,
+    viewStartHour: 0,
+  }
 }
 
 function formatHourLabel(hours: number) {

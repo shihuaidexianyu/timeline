@@ -16,7 +16,9 @@
   line-height: 1.5;
   font-weight: 400;
   color: #162033;
-  background: linear-gradient(180deg, #f6f8fb 0%, #f3f6fa 100%);
+  background:
+    radial-gradient(circle at top left, rgba(255, 255, 255, 0.92), rgba(243, 247, 253, 0.88) 38%),
+    linear-gradient(180deg, #f4f7fb 0%, #eef3f8 100%);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -29,6 +31,7 @@
   --input-border: rgba(145, 159, 180, 0.26);
   --input-bg: #fbfcfe;
   --lane-border: rgba(145, 159, 180, 0.22);
+  --focus-ring: 0 0 0 3px rgba(47, 111, 219, 0.22);
 }
 
 * {
@@ -77,4 +80,9 @@ button {
 
 button {
   appearance: none;
+}
+
+button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
 }

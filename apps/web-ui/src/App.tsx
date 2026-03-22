@@ -23,6 +23,7 @@ import {
   buildDashboardModel,
   formatClockRange,
   formatDuration,
+  type ChartSegment,
   type DashboardFilter,
   type DashboardModel,
   type DonutSlice,
@@ -43,7 +44,11 @@ function App() {
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
   const [timeline, setTimeline] = useState<TimelineDayResponse | null>(null)
   const [agentSettings, setAgentSettings] = useState<AgentSettingsResponse | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [isBootstrapping, setIsBootstrapping] = useState(true)
+  const [isTimelineRefreshing, setIsTimelineRefreshing] = useState(false)
+  const [isPeriodRefreshing, setIsPeriodRefreshing] = useState(false)
+  const [isSettingsRefreshing, setIsSettingsRefreshing] = useState(false)
+  const [isCalendarRefreshing, setIsCalendarRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [settingsError, setSettingsError] = useState<string | null>(null)
   const [savingAutostart, setSavingAutostart] = useState(false)
@@ -51,7 +56,7 @@ function App() {
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null)
   const [appFilter, setAppFilter] = useState<DashboardFilter>(null)
   const [domainFilter, setDomainFilter] = useState<DashboardFilter>(null)
-  const [selectedBrowserSegmentId, setSelectedBrowserSegmentId] = useState<string | null>(null)
+  const [selectedFocusSegmentId, setSelectedFocusSegmentId] = useState<string | null>(null)
   const [zoomHours, setZoomHours] = useState<number>(0.5)
   const [viewStartHour, setViewStartHour] = useState(0)
   const [periodSummary, setPeriodSummary] = useState<PeriodSummaryResponse | null>(null)
@@ -70,7 +75,10 @@ function App() {
     let cancelled = false
 
     async function bootstrap() {
-      setLoading(true)
+      setIsBootstrapping(true)
+      setIsTimelineRefreshing(true)
+      setIsPeriodRefreshing(true)
+      setIsSettingsRefreshing(true)
       setError(null)
 
       try {
@@ -112,7 +120,10 @@ function App() {
         setError(message)
       } finally {
         if (!cancelled) {
-          setLoading(false)
+          setIsTimelineRefreshing(false)
+          setIsPeriodRefreshing(false)
+          setIsSettingsRefreshing(false)
+          setIsBootstrapping(false)
         }
       }
     }
@@ -139,37 +150,52 @@ function App() {
     let cancelled = false
 
     async function loadSelectedDate() {
-      setLoading(true)
+      setIsTimelineRefreshing(true)
+      setIsPeriodRefreshing(true)
       setError(null)
 
-      try {
-        const [nextTimeline, nextSettings, nextPeriod] = await Promise.all([
-          getTimeline(currentDate),
-          getAgentSettings(),
-          getPeriodSummary(currentDate),
-        ])
-        if (cancelled) {
-          return
-        }
+      const [timelineResult, periodResult] = await Promise.allSettled([
+        getTimeline(currentDate),
+        getPeriodSummary(currentDate),
+      ])
 
-        setTimeline(nextTimeline)
-        setAgentSettings(nextSettings)
-        setPeriodSummary(nextPeriod)
-        setAgentTimezone(nextTimeline.timezone)
-        setSettingsError(null)
+      if (cancelled) {
+        return
+      }
+
+      let nextError: string | null = null
+
+      if (timelineResult.status === 'fulfilled') {
+        setTimeline(timelineResult.value)
+        setAgentTimezone(timelineResult.value.timezone)
         setLastUpdatedAt(new Date().toLocaleTimeString())
-      } catch (loadError) {
+      } else {
         if (cancelled) {
           return
         }
 
         const message =
-          loadError instanceof Error ? loadError.message : '加载本地数据时发生未知错误'
-        setError(message)
-      } finally {
-        if (!cancelled) {
-          setLoading(false)
-        }
+          timelineResult.reason instanceof Error
+            ? timelineResult.reason.message
+            : '加载时间线数据时发生未知错误'
+        nextError = message
+      }
+
+      if (periodResult.status === 'fulfilled') {
+        setPeriodSummary(periodResult.value)
+        setAgentToday(periodResult.value.date)
+      } else {
+        const message =
+          periodResult.reason instanceof Error
+            ? periodResult.reason.message
+            : '加载统计汇总时发生未知错误'
+        nextError = nextError ?? message
+      }
+
+      setError(nextError)
+      if (!cancelled) {
+        setIsTimelineRefreshing(false)
+        setIsPeriodRefreshing(false)
       }
     }
 
@@ -187,12 +213,13 @@ function App() {
 
     let cancelled = false
     setCalendarError(null)
-    setMonthCalendar(null)
+    setIsCalendarRefreshing(true)
 
     void getMonthCalendar(calendarMonth)
       .then((data) => {
         if (!cancelled) {
           setMonthCalendar(data)
+          setIsCalendarRefreshing(false)
         }
       })
       .catch((loadError) => {
@@ -200,7 +227,7 @@ function App() {
           const message =
             loadError instanceof Error ? loadError.message : '加载月历数据时发生未知错误'
           setCalendarError(message)
-          setMonthCalendar(null)
+          setIsCalendarRefreshing(false)
         }
       })
 
@@ -213,17 +240,20 @@ function App() {
     setViewStartHour((current) => clampViewStart(current, zoomHours))
   }, [zoomHours])
 
-  const dashboard = timeline ? buildDashboardModel(timeline, activeOnly) : null
+  const dashboard = useMemo(
+    () => (timeline ? buildDashboardModel(timeline, activeOnly) : null),
+    [activeOnly, timeline],
+  )
 
-  const selectedBrowserSegment = useMemo(() => {
-    if (!dashboard || !selectedBrowserSegmentId) {
+  const selectedFocusSegment = useMemo(() => {
+    if (!dashboard || !selectedFocusSegmentId) {
       return null
     }
 
     return (
-      dashboard.focusSegments.find((segment) => segment.id === selectedBrowserSegmentId) ?? null
+      dashboard.focusSegments.find((segment) => segment.id === selectedFocusSegmentId) ?? null
     )
-  }, [dashboard, selectedBrowserSegmentId])
+  }, [dashboard, selectedFocusSegmentId])
 
   const browserDetail = useMemo(() => {
     if (!dashboard) {
@@ -231,16 +261,18 @@ function App() {
     }
 
     return buildBrowserDetailModel(
-      selectedBrowserSegment,
+      selectedFocusSegment,
       dashboard.browserSegments,
       domainFilter?.key ?? null,
     )
-  }, [dashboard, selectedBrowserSegment, domainFilter])
+  }, [dashboard, selectedFocusSegment, domainFilter])
 
   const viewStartSec = viewStartHour * 3600
   const viewEndSec = viewStartSec + zoomHours * 3600
   const pageInfo = pageMeta(page)
   const resolvedSelectedDate = selectedDate ?? timeline?.date ?? '--'
+  const hasDashboard = dashboard !== null
+  const showInitialLoading = !hasDashboard && isBootstrapping
 
   function applySelectedDate(nextDate: string) {
     const nextWindow = defaultTimelineViewport(nextDate, agentToday, agentTimezone)
@@ -248,7 +280,7 @@ function App() {
     startTransition(() => {
       setSelectedDate(nextDate)
       setCalendarMonth(monthFromDate(nextDate))
-      setSelectedBrowserSegmentId(null)
+      setSelectedFocusSegmentId(null)
       setDomainFilter(null)
       setZoomHours(nextWindow.zoomHours)
       setViewStartHour(nextWindow.viewStartHour)
@@ -263,7 +295,7 @@ function App() {
     startTransition(() => {
       setCalendarMonth(nextMonth)
       setSelectedDate(nextDate)
-      setSelectedBrowserSegmentId(null)
+      setSelectedFocusSegmentId(null)
       setDomainFilter(null)
       setZoomHours(nextWindow.zoomHours)
       setViewStartHour(nextWindow.viewStartHour)
@@ -274,12 +306,12 @@ function App() {
     <main className="app-shell app-layout">
       <aside className="sidebar-shell">
         <div className="sidebar-brand">
-          <p className="eyebrow">Timeline</p>
+          <p className="eyebrow">时间记录</p>
           <h1>个人活动</h1>
           <p className="sidebar-text">记录您的日常活动，明白时间都去了哪里。</p>
         </div>
 
-        <nav className="sidebar-nav" aria-label="Pages">
+        <nav className="sidebar-nav" aria-label="页面">
           {PAGE_ITEMS.map((item) => (
             <button
               key={item.id}
@@ -322,10 +354,11 @@ function App() {
           </div>
         </header>
 
-        {loading ? <LoadingState /> : null}
-        {error ? <ErrorState error={error} /> : null}
+        {showInitialLoading ? <LoadingState /> : null}
+        {error && !hasDashboard ? <ErrorState error={error} /> : null}
+        {error && hasDashboard ? <InlineErrorState error={error} /> : null}
 
-        {!loading && !error && dashboard ? (
+        {dashboard ? (
           <>
             {page === 'stats' ? (
               <StatsPage
@@ -340,6 +373,9 @@ function App() {
                 selectedDate={resolvedSelectedDate}
                 agentToday={agentToday}
                 calendarError={calendarError}
+                isTimelineRefreshing={isTimelineRefreshing}
+                isPeriodRefreshing={isPeriodRefreshing}
+                isCalendarRefreshing={isCalendarRefreshing}
                 onCalendarMonthChange={handleCalendarMonthChange}
                 onSelectDate={applySelectedDate}
               />
@@ -351,16 +387,18 @@ function App() {
                 appFilter={appFilter}
                 domainFilter={domainFilter}
                 selectedDate={resolvedSelectedDate}
-                selectedBrowserSegmentId={selectedBrowserSegmentId}
-                selectedBrowserSegment={selectedBrowserSegment}
+                selectedFocusSegmentId={selectedFocusSegmentId}
+                selectedFocusSegment={selectedFocusSegment}
                 browserDetail={browserDetail}
                 viewStartHour={viewStartHour}
                 viewStartSec={viewStartSec}
                 viewEndSec={viewEndSec}
                 zoomHours={zoomHours}
+                isTimelineRefreshing={isTimelineRefreshing}
+                setAppFilter={setAppFilter}
                 setZoomHours={setZoomHours}
                 setViewStartHour={setViewStartHour}
-                setSelectedBrowserSegmentId={setSelectedBrowserSegmentId}
+                setSelectedFocusSegmentId={setSelectedFocusSegmentId}
                 setDomainFilter={setDomainFilter}
               />
             ) : null}
@@ -374,6 +412,7 @@ function App() {
                 selectedDate={resolvedSelectedDate}
                 timezone={agentTimezone ?? timeline?.timezone ?? '--'}
                 savingAutostart={savingAutostart}
+                isSettingsRefreshing={isSettingsRefreshing}
                 onToggleAutostart={async (enabled) => {
                   setSavingAutostart(true)
                   setSettingsError(null)
@@ -419,6 +458,9 @@ function StatsPage(props: {
   selectedDate: string
   agentToday: string | null
   calendarError: string | null
+  isTimelineRefreshing: boolean
+  isPeriodRefreshing: boolean
+  isCalendarRefreshing: boolean
   onCalendarMonthChange: (month: string) => void
   onSelectDate: (date: string) => void
 }) {
@@ -436,13 +478,14 @@ function StatsPage(props: {
 
   return (
     <section className="page-stack">
-      <section className="stats-showcase-grid">
+      <section className="stats-overview-grid">
         <DailySnapshotCard
           selectedDate={props.selectedDate}
           selectedSummary={selectedSummary}
           dashboard={props.dashboard}
           topDomains={topDomains}
           appFilter={props.appFilter}
+          refreshing={props.isTimelineRefreshing}
           onSelectApp={props.setAppFilter}
         />
         <WeeklyRhythmCard
@@ -451,6 +494,7 @@ function StatsPage(props: {
           topApps={topApps}
           isCurrentDate={isCurrentDate}
           appFilter={props.appFilter}
+          refreshing={props.isPeriodRefreshing}
           onSelectApp={props.setAppFilter}
           onSelectDate={props.onSelectDate}
         />
@@ -460,59 +504,69 @@ function StatsPage(props: {
           idleSeconds={presenceByKey.get('idle') ?? 0}
           lockedSeconds={presenceByKey.get('locked') ?? 0}
           isCurrentDate={isCurrentDate}
+          refreshing={props.isTimelineRefreshing}
         />
       </section>
 
-      <section className="stats-support-grid">
-        <div className="page-content-layout">
-          <div className="page-content-main">
-            <div className="panel page-panel stats-calendar-card">
-              <div className="panel-header">
-                <div>
-                  <p className="section-kicker">Calendar</p>
-                  <h2>月度日历</h2>
-                </div>
-              </div>
-              {props.monthCalendar ? (
-                <CalendarGrid
-                  month={props.calendarMonth}
-                  days={props.monthCalendar.days}
-                  selectedDate={props.selectedDate}
-                  todayDate={props.agentToday}
-                  onSelectDate={props.onSelectDate}
-                  onMonthChange={props.onCalendarMonthChange}
-                />
-              ) : props.calendarError ? (
-                <div className="state-card error-card">{props.calendarError}</div>
-              ) : (
-                <div className="state-card">正在加载该月份的汇总日历…</div>
-              )}
+      <section className="stats-analysis-grid">
+        <div className="panel page-panel stats-analysis-card">
+          <div className="panel-header">
+            <div>
+              <p className="section-kicker">分析</p>
+              <h2>应用分布</h2>
             </div>
+            <RefreshBadge active={props.isTimelineRefreshing} />
           </div>
+          <DonutChart
+            title="应用分布"
+            totalLabel={formatDuration(props.dashboard.summary.focusSeconds)}
+            slices={props.dashboard.appSlices}
+            filter={props.appFilter}
+            filterKind="app"
+            onSelect={props.setAppFilter}
+          />
+        </div>
 
-          <div className="page-content-side stats-side-stack">
-            <div className="panel page-panel">
-              <DonutChart
-                title="应用分布"
-                totalLabel={formatDuration(props.dashboard.summary.focusSeconds)}
-                slices={props.dashboard.appSlices}
-                filter={props.appFilter}
-                filterKind="app"
-                onSelect={props.setAppFilter}
-              />
+        <div className="panel page-panel stats-analysis-card">
+          <div className="panel-header">
+            <div>
+              <p className="section-kicker">分析</p>
+              <h2>域名分布</h2>
             </div>
-
-            <div className="panel page-panel">
-              <DonutChart
-                title="域名分布"
-                totalLabel={formatDuration(sumSlices(props.dashboard.domainSlices))}
-                slices={props.dashboard.domainSlices}
-                filter={props.domainFilter}
-                filterKind="domain"
-                onSelect={props.setDomainFilter}
-              />
-            </div>
+            <RefreshBadge active={props.isTimelineRefreshing} />
           </div>
+          <DonutChart
+            title="域名分布"
+            totalLabel={formatDuration(sumSlices(props.dashboard.domainSlices))}
+            slices={props.dashboard.domainSlices}
+            filter={props.domainFilter}
+            filterKind="domain"
+            onSelect={props.setDomainFilter}
+          />
+        </div>
+
+        <div className="panel page-panel stats-calendar-card">
+          <div className="panel-header">
+            <div>
+              <p className="section-kicker">月度热力图</p>
+              <h2>使用热度</h2>
+            </div>
+            <RefreshBadge active={props.isCalendarRefreshing} />
+          </div>
+          {props.monthCalendar ? (
+            <CalendarGrid
+              month={props.calendarMonth}
+              days={props.monthCalendar.days}
+              selectedDate={props.selectedDate}
+              todayDate={props.agentToday}
+              onSelectDate={props.onSelectDate}
+              onMonthChange={props.onCalendarMonthChange}
+            />
+          ) : props.calendarError ? (
+            <div className="state-card error-card">{props.calendarError}</div>
+          ) : (
+            <div className="state-card">正在加载该月份的汇总日历…</div>
+          )}
         </div>
       </section>
     </section>
@@ -525,6 +579,7 @@ function DailySnapshotCard(props: {
   dashboard: DashboardModel
   topDomains: DonutSlice[]
   appFilter: DashboardFilter
+  refreshing: boolean
   onSelectApp: (value: DashboardFilter) => void
 }) {
   const appSlices = props.dashboard.appSlices.filter((slice) => slice.key !== 'others').slice(0, 4)
@@ -535,13 +590,18 @@ function DailySnapshotCard(props: {
     <article className="showcase-card showcase-card-daily">
       <div className="showcase-card-head">
         <div>
-          <p className="section-kicker">Daily Pulse</p>
+          <p className="section-kicker">今日概览</p>
           <h2>{formatDateHeading(props.selectedDate)}</h2>
         </div>
-        <span className="showcase-avatar">{props.selectedDate.slice(8, 10)}</span>
+        <div className="card-head-side">
+          <RefreshBadge active={props.refreshing} />
+          <span className="showcase-avatar">{props.selectedDate.slice(8, 10)}</span>
+        </div>
       </div>
 
-      <p className="showcase-copy">围绕所选日期，快速查看活跃时长、切换频率和最常出现的上下文。</p>
+      <p className="showcase-copy">
+        先把这一天最重要的结果看完，再决定是否深入到应用分布、域名或时间线。
+      </p>
 
       <div className="showcase-donut-wrap">
         <div className="showcase-compact-donut">
@@ -557,7 +617,7 @@ function DailySnapshotCard(props: {
                   : { kind: 'app', key },
               )
             }}
-            height={232}
+            height={200}
             emptyLabel="所选日期没有可展示的应用分布"
           />
         </div>
@@ -587,13 +647,13 @@ function DailySnapshotCard(props: {
               )
             }}
           >
-            常用应用
+            主应用
             <strong>{topApp.label}</strong>
           </button>
         ) : null}
         {topDomain ? (
           <span className="showcase-tag">
-            常用域名
+            主域名
             <strong>{topDomain.label}</strong>
           </span>
         ) : null}
@@ -614,6 +674,7 @@ function WeeklyRhythmCard(props: {
   topApps: DonutSlice[]
   isCurrentDate: boolean
   appFilter: DashboardFilter
+  refreshing: boolean
   onSelectApp: (value: DashboardFilter) => void
   onSelectDate: (date: string) => void
 }) {
@@ -636,10 +697,12 @@ function WeeklyRhythmCard(props: {
     <article className="showcase-card showcase-card-dashboard">
       <div className="showcase-card-head">
         <div>
-          <p className="section-kicker">Dashboard</p>
+          <p className="section-kicker">周趋势</p>
           <h2>{props.isCurrentDate ? '本周节奏' : '所在周节奏'}</h2>
         </div>
-        <div className="showcase-chip-row">
+        <div className="card-head-side">
+          <RefreshBadge active={props.refreshing} />
+          <div className="showcase-chip-row">
           <button
             type="button"
             className={`showcase-chip-button ${selectedMetric === 'active' ? 'is-selected' : ''}`}
@@ -654,6 +717,7 @@ function WeeklyRhythmCard(props: {
           >
             应用
           </button>
+          </div>
         </div>
       </div>
 
@@ -686,7 +750,7 @@ function WeeklyRhythmCard(props: {
 
       <div className="mini-list-card">
         <div className="mini-list-head">
-          <span>Most Used</span>
+          <span>重点查看</span>
           <strong>应用排行</strong>
         </div>
         <div className="mini-usage-list">
@@ -726,6 +790,7 @@ function FocusBalanceCard(props: {
   idleSeconds: number
   lockedSeconds: number
   isCurrentDate: boolean
+  refreshing: boolean
 }) {
   const activeRatio =
     props.dashboard.summary.focusSeconds > 0
@@ -773,13 +838,14 @@ function FocusBalanceCard(props: {
     <article className="showcase-card showcase-card-focus">
       <div className="showcase-card-head">
         <div>
-          <p className="section-kicker">WorkTime</p>
-          <h2>{props.isCurrentDate ? '今天专注' : '当日专注'}</h2>
+          <p className="section-kicker">状态平衡</p>
+          <h2>{props.isCurrentDate ? '今天状态分布' : '当日状态分布'}</h2>
         </div>
+        <RefreshBadge active={props.refreshing} />
       </div>
 
       <p className="focus-card-copy">
-        用状态环查看活跃、空闲和锁定分布，再和当天的应用时长快速对照。
+        用状态环对照活跃、空闲和锁定，把当天的专注效率和使用节奏放在同一视图里。
       </p>
 
       <div className="showcase-donut-wrap">
@@ -892,19 +958,59 @@ function TimelinePage(props: {
   appFilter: DashboardFilter
   domainFilter: DashboardFilter
   selectedDate: string
-  selectedBrowserSegmentId: string | null
-  selectedBrowserSegment: DashboardModel['focusSegments'][number] | null
+  selectedFocusSegmentId: string | null
+  selectedFocusSegment: DashboardModel['focusSegments'][number] | null
   browserDetail: ReturnType<typeof buildBrowserDetailModel>
   viewStartHour: number
   viewStartSec: number
   viewEndSec: number
   zoomHours: number
+  isTimelineRefreshing: boolean
+  setAppFilter: (value: DashboardFilter) => void
   setZoomHours: (hours: number) => void
   setViewStartHour: (hours: number) => void
-  setSelectedBrowserSegmentId: (value: string | null | ((current: string | null) => string | null)) => void
+  setSelectedFocusSegmentId: (value: string | null | ((current: string | null) => string | null)) => void
   setDomainFilter: (value: DashboardFilter) => void
 }) {
-  const selectedBrowserSegment = props.selectedBrowserSegment
+  const selectedFocusSegment = props.selectedFocusSegment
+  const visibleFocusItems = useMemo(
+    () =>
+      buildVisibleFocusItems(
+        props.dashboard.focusSegments,
+        props.viewStartSec,
+        props.viewEndSec,
+      ),
+    [props.dashboard.focusSegments, props.viewEndSec, props.viewStartSec],
+  )
+  const zoomPresets = [0.25, 0.5, 1, 4]
+
+  function applyWindow(nextZoomHours: number, nextStartHour: number) {
+    props.setZoomHours(nextZoomHours)
+    props.setViewStartHour(clampViewStart(normalizeZoomHours(nextStartHour), nextZoomHours))
+  }
+
+  function centerOnSelectedSegment() {
+    if (!selectedFocusSegment) {
+      return
+    }
+
+    const nextZoom = clampZoomHours(
+      Math.max(
+        normalizeZoomHours((selectedFocusSegment.durationSec / 3600) * 1.6),
+        MIN_ZOOM_HOURS,
+      ),
+    )
+    const segmentMidpoint =
+      selectedFocusSegment.startSec + selectedFocusSegment.durationSec / 2
+    const nextStart = clampViewStart(segmentMidpoint / 3600 - nextZoom / 2, nextZoom)
+
+    applyWindow(nextZoom, nextStart)
+  }
+
+  function handleSelectFocusSegment(segment: ChartSegment) {
+    props.setSelectedFocusSegmentId((current) => (current === segment.id ? null : segment.id))
+    props.setDomainFilter(null)
+  }
 
   return (
     <section className="page-stack">
@@ -917,30 +1023,62 @@ function TimelinePage(props: {
                 <h2>应用时间线</h2>
               </div>
               <div className="timeline-panel-actions">
+                <RefreshBadge active={props.isTimelineRefreshing} />
                 <p className="timezone-label">
                   当前窗口 {formatHourLabel(props.viewStartHour)} -{' '}
                   {formatHourLabel(props.viewStartHour + props.zoomHours)}
                 </p>
-                {selectedBrowserSegment ? (
+              </div>
+            </div>
+
+            <div className="timeline-control-bar">
+              <div className="timeline-control-group">
+                <span className="timeline-control-label">缩放</span>
+                {zoomPresets.map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    className={`timeline-control-button ${
+                      Math.abs(props.zoomHours - preset) < 0.001 ? 'is-active' : ''
+                    }`}
+                    onClick={() => {
+                      const centerHour = props.viewStartHour + props.zoomHours / 2
+                      applyWindow(preset, centerHour - preset / 2)
+                    }}
+                  >
+                    {formatZoomPreset(preset)}
+                  </button>
+                ))}
+              </div>
+
+              <div className="timeline-control-group">
+                <span className="timeline-control-label">窗口</span>
+                <button
+                  type="button"
+                  className="timeline-control-button"
+                  onClick={() => applyWindow(props.zoomHours, props.viewStartHour - props.zoomHours / 2)}
+                >
+                  向前
+                </button>
+                <button
+                  type="button"
+                  className="timeline-control-button"
+                  onClick={() => applyWindow(props.zoomHours, 0)}
+                >
+                  回到起点
+                </button>
+                <button
+                  type="button"
+                  className="timeline-control-button"
+                  onClick={() => applyWindow(props.zoomHours, props.viewStartHour + props.zoomHours / 2)}
+                >
+                  向后
+                </button>
+                {selectedFocusSegment ? (
                   <button
                     type="button"
-                    className="zoom-button"
-                    onClick={() => {
-                      const nextZoom = clampZoomHours(
-                        Math.max(
-                          normalizeZoomHours((selectedBrowserSegment.durationSec / 3600) * 1.6),
-                          MIN_ZOOM_HOURS,
-                        ),
-                      )
-                      const segmentMidpoint =
-                        selectedBrowserSegment.startSec + selectedBrowserSegment.durationSec / 2
-                      const nextStart = clampViewStart(
-                        segmentMidpoint / 3600 - nextZoom / 2,
-                        nextZoom,
-                      )
-                      props.setZoomHours(nextZoom)
-                      props.setViewStartHour(nextStart)
-                    }}
+                    className="timeline-control-button"
+                    onClick={centerOnSelectedSegment}
                   >
                     定位到选中段
                   </button>
@@ -978,8 +1116,7 @@ function TimelinePage(props: {
               interactiveZoom
               minViewHours={MIN_ZOOM_HOURS}
               maxViewHours={MAX_ZOOM_HOURS}
-              showTable
-              selectedSegmentId={props.selectedBrowserSegmentId}
+              selectedSegmentId={props.selectedFocusSegmentId}
               onViewportChange={(nextStartSec, nextEndSec) => {
                 const nextZoom = clampZoomHours(
                   normalizeZoomHours((nextEndSec - nextStartSec) / 3600),
@@ -993,16 +1130,7 @@ function TimelinePage(props: {
                   return
                 }
 
-                if (segment.isBrowser) {
-                  props.setSelectedBrowserSegmentId((current) =>
-                    current === segment.id ? null : segment.id,
-                  )
-                  props.setDomainFilter(null)
-                  return
-                }
-
-                props.setSelectedBrowserSegmentId(null)
-                props.setDomainFilter(null)
+                handleSelectFocusSegment(segment)
               }}
             />
           </div>
@@ -1012,42 +1140,100 @@ function TimelinePage(props: {
           <div className="panel page-panel browser-detail-panel">
             <div className="panel-header">
               <div>
-                <p className="section-kicker">浏览器</p>
-                <h2>浏览器域名明细</h2>
+                <p className="section-kicker">明细</p>
+                <h2>选中段详情</h2>
               </div>
-              {selectedBrowserSegment ? (
+              <div className="timeline-panel-actions">
+                <RefreshBadge active={props.isTimelineRefreshing} />
+                {selectedFocusSegment ? (
                 <p className="timezone-label">
                   {formatClockRange(
-                    selectedBrowserSegment.startSec,
-                    selectedBrowserSegment.endSec,
+                    selectedFocusSegment.startSec,
+                    selectedFocusSegment.endSec,
                   )}
                 </p>
-              ) : null}
+                ) : null}
+              </div>
             </div>
 
-            {selectedBrowserSegment ? (
+            {selectedFocusSegment ? (
               <>
-                <div className="browser-context">
-                  <strong>{selectedBrowserSegment.label}</strong>
-                  <span>{selectedBrowserSegment.detail}</span>
+                <div className="selection-summary-card">
+                  <div>
+                    <p className="section-kicker">
+                      {selectedFocusSegment.isBrowser ? '已选中浏览器段' : '已选中应用段'}
+                    </p>
+                    <strong>{selectedFocusSegment.label}</strong>
+                  </div>
+                  <button
+                    type="button"
+                    className="timeline-control-button"
+                    onClick={() => {
+                      props.setSelectedFocusSegmentId(null)
+                      props.setDomainFilter(null)
+                    }}
+                  >
+                    清除选择
+                  </button>
                 </div>
 
-                <div className="insight-grid browser-detail-layout">
-                  <div className="panel panel-subtle browser-summary-panel">
-                    <BrowserDomainList
-                      slices={props.browserDetail.slices}
-                      filter={props.domainFilter}
-                      onSelect={props.setDomainFilter}
-                      totalLabel={formatDuration(props.browserDetail.totalSeconds)}
-                    />
-                  </div>
+                <div className="selection-summary-meta">
+                  <span>
+                    <strong>时间段</strong>
+                    {formatClockRange(
+                      selectedFocusSegment.startSec,
+                      selectedFocusSegment.endSec,
+                    )}
+                  </span>
+                  <span>
+                    <strong>时长</strong>
+                    {formatDuration(selectedFocusSegment.durationSec)}
+                  </span>
                 </div>
+
+                <div className="browser-context">
+                  <strong>{selectedFocusSegment.label}</strong>
+                  <span>{selectedFocusSegment.detail}</span>
+                </div>
+
+                {selectedFocusSegment.isBrowser ? (
+                  <div className="insight-grid browser-detail-layout">
+                    <div className="panel panel-subtle browser-summary-panel">
+                      <BrowserDomainList
+                        slices={props.browserDetail.slices}
+                        filter={props.domainFilter}
+                        onSelect={props.setDomainFilter}
+                        totalLabel={formatDuration(props.browserDetail.totalSeconds)}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="empty-card browser-empty browser-empty-compact">
+                    当前选中段不是浏览器应用，因此这里不显示域名拆分数据。
+                  </div>
+                )}
               </>
             ) : (
               <div className="empty-card browser-empty">
-                点击主时间线里的浏览器应用段后，这里会显示该时间段内各个域名占用的时间。
+                点击主时间线里的任意应用段后，这里会显示该段的通用明细；如果是浏览器应用，还会额外显示域名占用时间。
               </div>
             )}
+
+            <div className="detail-list-section">
+              <div className="browser-domain-list-head">
+                <div>
+                  <p className="section-kicker">窗口记录</p>
+                  <h3>当前窗口内的应用段</h3>
+                </div>
+                <strong>{visibleFocusItems.length} 条</strong>
+              </div>
+
+              <FocusSegmentList
+                segments={visibleFocusItems}
+                selectedSegmentId={props.selectedFocusSegmentId}
+                onSelectSegment={handleSelectFocusSegment}
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -1063,6 +1249,7 @@ function SettingsPage(props: {
   selectedDate: string
   timezone: string
   savingAutostart: boolean
+  isSettingsRefreshing: boolean
   onToggleAutostart: (enabled: boolean) => Promise<void>
 }) {
   return (
@@ -1070,8 +1257,13 @@ function SettingsPage(props: {
       <div className="page-content-layout">
         <div className="page-content-main page-card-stack">
           <div className="panel page-panel settings-card">
-            <p className="section-kicker">服务</p>
-            <h2>本地服务</h2>
+            <div className="panel-header">
+              <div>
+                <p className="section-kicker">服务</p>
+                <h2>本地服务</h2>
+              </div>
+              <RefreshBadge active={props.isSettingsRefreshing} />
+            </div>
             <dl className="settings-list">
               <div>
                 <dt>接口地址</dt>
@@ -1105,17 +1297,25 @@ function SettingsPage(props: {
                 <dd>
                   <button
                     type="button"
-                    className={`toggle-button ${props.agentSettings?.autostart_enabled ? 'is-active' : ''}`}
+                    role="switch"
+                    aria-checked={props.agentSettings?.autostart_enabled ?? false}
+                    aria-label="开机自启动"
+                    className={`toggle-switch ${props.agentSettings?.autostart_enabled ? 'is-active' : ''}`}
                     disabled={props.savingAutostart}
                     onClick={() => {
                       void props.onToggleAutostart(!(props.agentSettings?.autostart_enabled ?? false))
                     }}
                   >
-                    {props.savingAutostart
-                      ? '保存中…'
-                      : props.agentSettings?.autostart_enabled
-                        ? '已启用'
-                        : '已禁用'}
+                    <span className="toggle-switch-track" aria-hidden="true">
+                      <span className="toggle-switch-thumb" />
+                    </span>
+                    <span className="toggle-switch-text">
+                      {props.savingAutostart
+                        ? '保存中…'
+                        : props.agentSettings?.autostart_enabled
+                          ? '已启用'
+                          : '已禁用'}
+                    </span>
                   </button>
                 </dd>
               </div>
@@ -1209,12 +1409,61 @@ function BrowserDomainList(props: {
   )
 }
 
+function FocusSegmentList(props: {
+  segments: ChartSegment[]
+  selectedSegmentId: string | null
+  onSelectSegment: (segment: ChartSegment) => void
+}) {
+  if (props.segments.length === 0) {
+    return <div className="empty-card">当前窗口内没有应用段记录</div>
+  }
+
+  return (
+    <div className="detail-segment-list">
+      {props.segments.map((segment) => {
+        const isSelected = props.selectedSegmentId === segment.id
+
+        return (
+          <button
+            key={segment.id}
+            type="button"
+            className={`detail-segment-item ${isSelected ? 'is-selected' : ''}`}
+            onClick={() => props.onSelectSegment(segment)}
+          >
+            <div className="detail-segment-head">
+              <span className="detail-segment-name">
+                <i style={{ backgroundColor: segment.color }} />
+                {segment.label}
+              </span>
+              <span className="detail-segment-range">
+                {formatClockRange(segment.startSec, segment.endSec)}
+              </span>
+            </div>
+            <div className="detail-segment-meta">
+              <span>{segment.detail}</span>
+              <strong>{formatDuration(segment.durationSec)}</strong>
+            </div>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function LoadingState() {
   return <div className="state-card">正在从本地服务读取图表数据…</div>
 }
 
 function ErrorState(props: { error: string }) {
   return <div className="state-card error-card">{props.error}</div>
+}
+
+function InlineErrorState(props: { error: string }) {
+  return <div className="inline-error-banner">{props.error}</div>
+}
+
+function RefreshBadge(props: { active: boolean }) {
+  return props.active ? <span className="refresh-badge">更新中</span> : null
 }
 
 function useHashPage(): [AppPage, (page: AppPage) => void] {
@@ -1257,7 +1506,7 @@ function pageMeta(page: AppPage) {
     return {
       kicker: '时间线',
       title: '应用时间线',
-      description: '按时间查看应用段、状态段，以及浏览器应用内部的域名明细。',
+      description: '先用显式缩放和窗口控制定位，再查看浏览器应用内部的域名明细。',
     }
   }
 
@@ -1272,7 +1521,7 @@ function pageMeta(page: AppPage) {
   return {
     kicker: '统计',
     title: '统计概览',
-    description: '查看应用、域名和状态分布，以及当天的聚合结果。',
+    description: '先看当日概览，再进入应用分布、域名分布和月度回看。',
   }
 }
 
@@ -1362,6 +1611,30 @@ function formatDateHeading(date: string) {
 
 function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`
+}
+
+function formatZoomPreset(hours: number) {
+  if (hours < 1) {
+    return `${Math.round(hours * 60)} 分钟`
+  }
+
+  return `${hours} 小时`
+}
+
+function buildVisibleFocusItems(
+  segments: ChartSegment[],
+  viewStartSec: number,
+  viewEndSec: number,
+) {
+  return segments
+    .filter((segment) => segment.endSec > viewStartSec && segment.startSec < viewEndSec)
+    .sort((left, right) => {
+      if (left.startSec !== right.startSec) {
+        return left.startSec - right.startSec
+      }
+
+      return right.durationSec - left.durationSec
+    })
 }
 
 function currentHourInTimezone(timezone: string | null) {

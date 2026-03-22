@@ -381,6 +381,7 @@ export function TimelineChart(props: {
               <button
                 type="button"
                 className="timeline-overview-handle is-start"
+                aria-label="调整时间窗口开始位置"
                 onPointerDown={(event) =>
                   beginOverviewDrag(event, 'resize-start', props, dragStateRef)
                 }
@@ -391,6 +392,7 @@ export function TimelineChart(props: {
               <button
                 type="button"
                 className="timeline-overview-handle is-end"
+                aria-label="调整时间窗口结束位置"
                 onPointerDown={(event) =>
                   beginOverviewDrag(event, 'resize-end', props, dragStateRef)
                 }

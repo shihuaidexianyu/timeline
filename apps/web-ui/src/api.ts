@@ -68,6 +68,12 @@ export type AgentSettingsResponse = {
   tray_enabled: boolean
   web_ui_url: string
   launch_command: string
+  idle_threshold_secs: number
+  poll_interval_millis: number
+  record_window_titles: boolean
+  record_page_titles: boolean
+  ignored_apps: string[]
+  ignored_domains: string[]
   monitors: AgentMonitorStatus[]
 }
 
@@ -77,6 +83,20 @@ export type UpdateAutostartRequest = {
 
 export type UpdateAutostartResponse = {
   autostart_enabled: boolean
+}
+
+export type UpdateAgentConfigRequest = {
+  idle_threshold_secs: number
+  poll_interval_millis: number
+  record_window_titles: boolean
+  record_page_titles: boolean
+  ignored_apps: string[]
+  ignored_domains: string[]
+}
+
+export type UpdateAgentConfigResponse = {
+  saved: boolean
+  requires_restart: boolean
 }
 
 type ApiEnvelope<T> = {
@@ -160,6 +180,23 @@ export async function updateAutostart(payload: UpdateAutostartRequest) {
   const result = (await response.json()) as ApiEnvelope<UpdateAutostartResponse>
   if (!response.ok || !result.ok || result.data === null) {
     throw new Error(result.error?.message ?? '更新开机自启动设置失败')
+  }
+
+  return result.data
+}
+
+export async function updateAgentConfig(payload: UpdateAgentConfigRequest) {
+  const response = await fetch(`${API_BASE_URL}/api/settings/config`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  })
+
+  const result = (await response.json()) as ApiEnvelope<UpdateAgentConfigResponse>
+  if (!response.ok || !result.ok || result.data === null) {
+    throw new Error(result.error?.message ?? '更新本地配置失败')
   }
 
   return result.data

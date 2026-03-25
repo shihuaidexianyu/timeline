@@ -13,7 +13,8 @@ use axum::{
 };
 use common::{
     AgentMonitorStatus, AgentSettingsResponse, ApiResponse, BrowserEventPayload, HealthResponse,
-    MonthCalendarResponse, PeriodSummaryResponse, UpdateAutostartRequest, UpdateAutostartResponse,
+    MonthCalendarResponse, PeriodSummaryResponse, UpdateAgentConfigRequest,
+    UpdateAgentConfigResponse, UpdateAutostartRequest, UpdateAutostartResponse,
 };
 use serde::Deserialize;
 use time::format_description::parse;
@@ -35,6 +36,7 @@ pub fn build_router(state: AgentState) -> Router {
         .route("/api/stats/focus", get(get_focus_stats))
         .route("/api/settings", get(get_settings))
         .route("/api/settings/autostart", post(post_autostart))
+        .route("/api/settings/config", post(post_update_agent_config))
         .route("/api/debug/recent-events", get(get_recent_events))
         .route("/api/events/browser", post(post_browser_event))
         .route("/api/calendar/month", get(get_month_calendar))
@@ -122,7 +124,10 @@ async fn get_focus_stats(
 async fn get_recent_events(
     State(state): State<AgentState>,
 ) -> Result<Json<ApiResponse<Vec<common::DebugEvent>>>, AppError> {
-    let events = state.store().read_recent_events(DEBUG_RECENT_EVENTS_LIMIT).await?;
+    let events = state
+        .store()
+        .read_recent_events(DEBUG_RECENT_EVENTS_LIMIT)
+        .await?;
     Ok(Json(ApiResponse::ok(events)))
 }
 
@@ -137,6 +142,12 @@ async fn get_settings(
         tray_enabled: state.config().tray_enabled,
         web_ui_url: state.config().effective_web_ui_url(),
         launch_command: state.launch_command(),
+        idle_threshold_secs: state.config().idle_threshold_secs,
+        poll_interval_millis: state.config().poll_interval_millis,
+        record_window_titles: state.config().record_window_titles,
+        record_page_titles: state.config().record_page_titles,
+        ignored_apps: state.config().ignored_apps.clone(),
+        ignored_domains: state.config().ignored_domains.clone(),
         monitors,
     })))
 }
@@ -149,6 +160,35 @@ async fn post_autostart(
 
     Ok(Json(ApiResponse::ok(UpdateAutostartResponse {
         autostart_enabled,
+    })))
+}
+
+async fn post_update_agent_config(
+    State(state): State<AgentState>,
+    Json(payload): Json<UpdateAgentConfigRequest>,
+) -> Result<Json<ApiResponse<UpdateAgentConfigResponse>>, AppError> {
+    validate_agent_config_payload(&payload)?;
+
+    let mut next = state.config().clone();
+    next.idle_threshold_secs = payload.idle_threshold_secs;
+    next.poll_interval_millis = payload.poll_interval_millis;
+    next.record_window_titles = payload.record_window_titles;
+    next.record_page_titles = payload.record_page_titles;
+    next.ignored_apps = sanitize_list(payload.ignored_apps);
+    next.ignored_domains = sanitize_list(payload.ignored_domains);
+
+    let Some(config_path) = state.config_path() else {
+        return Err(AppError::bad_request(
+            "config_path_unavailable",
+            "current agent config path is unavailable",
+        ));
+    };
+
+    next.save_to_path(config_path).map_err(AppError::internal)?;
+
+    Ok(Json(ApiResponse::ok(UpdateAgentConfigResponse {
+        saved: true,
+        requires_restart: true,
     })))
 }
 
@@ -209,7 +249,10 @@ fn parse_or_current_month(
     if let Some(value) = value {
         let parts: Vec<&str> = value.split('-').collect();
         if parts.len() != 2 {
-            return Err(AppError::bad_request("invalid_month", "month must use YYYY-MM"));
+            return Err(AppError::bad_request(
+                "invalid_month",
+                "month must use YYYY-MM",
+            ));
         }
 
         let year: i32 = parts[0]
@@ -383,6 +426,36 @@ fn monitor_status(
         detail: detail.to_string(),
         last_seen,
     }
+}
+
+fn validate_agent_config_payload(payload: &UpdateAgentConfigRequest) -> Result<(), AppError> {
+    if !(15..=1800).contains(&payload.idle_threshold_secs) {
+        return Err(AppError::bad_request(
+            "invalid_idle_threshold",
+            "idle_threshold_secs must be between 15 and 1800 seconds",
+        ));
+    }
+
+    if !(250..=5000).contains(&payload.poll_interval_millis) {
+        return Err(AppError::bad_request(
+            "invalid_poll_interval",
+            "poll_interval_millis must be between 250 and 5000 milliseconds",
+        ));
+    }
+
+    Ok(())
+}
+
+fn sanitize_list(items: Vec<String>) -> Vec<String> {
+    let mut values: Vec<String> = items
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect();
+
+    values.sort_by_key(|value| value.to_ascii_lowercase());
+    values.dedup_by(|left, right| left.eq_ignore_ascii_case(right));
+    values
 }
 
 struct AppError {

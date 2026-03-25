@@ -141,6 +141,12 @@ pub struct AgentSettingsResponse {
     pub tray_enabled: bool,
     pub web_ui_url: String,
     pub launch_command: String,
+    pub idle_threshold_secs: u64,
+    pub poll_interval_millis: u64,
+    pub record_window_titles: bool,
+    pub record_page_titles: bool,
+    pub ignored_apps: Vec<String>,
+    pub ignored_domains: Vec<String>,
     pub monitors: Vec<AgentMonitorStatus>,
 }
 
@@ -152,6 +158,22 @@ pub struct UpdateAutostartRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UpdateAutostartResponse {
     pub autostart_enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateAgentConfigRequest {
+    pub idle_threshold_secs: u64,
+    pub poll_interval_millis: u64,
+    pub record_window_titles: bool,
+    pub record_page_titles: bool,
+    pub ignored_apps: Vec<String>,
+    pub ignored_domains: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateAgentConfigResponse {
+    pub saved: bool,
+    pub requires_restart: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

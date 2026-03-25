@@ -80,6 +80,18 @@ impl AppConfig {
         Ok(())
     }
 
+    pub fn save_to_path(&self, path: &Path) -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("failed to create config directory for {:?}", path))?;
+        }
+
+        let content = toml::to_string_pretty(self).context("failed to serialize config")?;
+        std::fs::write(path, content)
+            .with_context(|| format!("failed to write config to {:?}", path))?;
+        Ok(())
+    }
+
     pub fn effective_web_ui_url(&self) -> String {
         if self.web_ui_url.trim().is_empty()
             || self.web_ui_url == LEGACY_DEV_WEB_UI_URL
@@ -334,7 +346,9 @@ mod tests {
     fn still_discovers_repo_dist_for_dev_binaries() {
         let candidates = web_ui_dist_candidates(
             Some(Path::new(r"C:\Users\me\repo")),
-            Some(Path::new(r"C:\Users\me\repo\target\release\timeline-agent.exe")),
+            Some(Path::new(
+                r"C:\Users\me\repo\target\release\timeline-agent.exe",
+            )),
         );
 
         assert_eq!(

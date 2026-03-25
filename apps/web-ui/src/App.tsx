@@ -8,6 +8,7 @@ import {
   getMonthCalendar,
   getPeriodSummary,
   getTimeline,
+  updateAgentConfig,
   updateAutostart,
   type AgentSettingsResponse,
   type DaySummary,
@@ -51,7 +52,9 @@ function App() {
   const [isCalendarRefreshing, setIsCalendarRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [settingsError, setSettingsError] = useState<string | null>(null)
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null)
   const [savingAutostart, setSavingAutostart] = useState(false)
+  const [savingConfig, setSavingConfig] = useState(false)
   const activeOnly = false
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null)
   const [appFilter, setAppFilter] = useState<DashboardFilter>(null)
@@ -373,14 +376,17 @@ function App() {
                 agentSettings={agentSettings}
                 error={error}
                 settingsError={settingsError}
+                settingsNotice={settingsNotice}
                 lastUpdatedAt={lastUpdatedAt}
                 selectedDate={resolvedSelectedDate}
                 timezone={agentTimezone ?? timeline?.timezone ?? '--'}
                 savingAutostart={savingAutostart}
+                savingConfig={savingConfig}
                 isSettingsRefreshing={isSettingsRefreshing}
                 onToggleAutostart={async (enabled) => {
                   setSavingAutostart(true)
                   setSettingsError(null)
+                  setSettingsNotice(null)
 
                   try {
                     const result = await updateAutostart({ enabled })
@@ -400,6 +406,41 @@ function App() {
                     setSettingsError(message)
                   } finally {
                     setSavingAutostart(false)
+                  }
+                }}
+                onUpdateConfig={async (payload) => {
+                  setSavingConfig(true)
+                  setSettingsError(null)
+                  setSettingsNotice(null)
+
+                  try {
+                    const result = await updateAgentConfig(payload)
+                    if (result.saved) {
+                      setAgentSettings((current) =>
+                        current
+                          ? {
+                            ...current,
+                            idle_threshold_secs: payload.idle_threshold_secs,
+                            poll_interval_millis: payload.poll_interval_millis,
+                            record_window_titles: payload.record_window_titles,
+                            record_page_titles: payload.record_page_titles,
+                            ignored_apps: payload.ignored_apps,
+                            ignored_domains: payload.ignored_domains,
+                          }
+                          : current,
+                      )
+                      setSettingsNotice(
+                        result.requires_restart
+                          ? '设置已保存，重启 timeline-agent 后生效。'
+                          : null,
+                      )
+                    }
+                  } catch (updateError) {
+                    const message =
+                      updateError instanceof Error ? updateError.message : '更新本地配置失败'
+                    setSettingsError(message)
+                  } finally {
+                    setSavingConfig(false)
                   }
                 }}
               />
@@ -961,13 +1002,54 @@ function SettingsPage(props: {
   agentSettings: AgentSettingsResponse | null
   error: string | null
   settingsError: string | null
+  settingsNotice: string | null
   lastUpdatedAt: string | null
   selectedDate: string
   timezone: string
   savingAutostart: boolean
+  savingConfig: boolean
   isSettingsRefreshing: boolean
   onToggleAutostart: (enabled: boolean) => Promise<void>
+  onUpdateConfig: (payload: {
+    idle_threshold_secs: number
+    poll_interval_millis: number
+    record_window_titles: boolean
+    record_page_titles: boolean
+    ignored_apps: string[]
+    ignored_domains: string[]
+  }) => Promise<void>
 }) {
+  const [idleThresholdSecs, setIdleThresholdSecs] = useState(60)
+  const [pollIntervalMillis, setPollIntervalMillis] = useState(1000)
+  const [recordWindowTitles, setRecordWindowTitles] = useState(true)
+  const [recordPageTitles, setRecordPageTitles] = useState(true)
+  const [ignoredAppsText, setIgnoredAppsText] = useState('')
+  const [ignoredDomainsText, setIgnoredDomainsText] = useState('')
+
+  useEffect(() => {
+    if (!props.agentSettings) {
+      return
+    }
+
+    setIdleThresholdSecs(props.agentSettings.idle_threshold_secs)
+    setPollIntervalMillis(props.agentSettings.poll_interval_millis)
+    setRecordWindowTitles(props.agentSettings.record_window_titles)
+    setRecordPageTitles(props.agentSettings.record_page_titles)
+    setIgnoredAppsText(props.agentSettings.ignored_apps.join('\n'))
+    setIgnoredDomainsText(props.agentSettings.ignored_domains.join('\n'))
+  }, [props.agentSettings])
+
+  async function handleSaveConfig() {
+    await props.onUpdateConfig({
+      idle_threshold_secs: clampNumber(Math.round(idleThresholdSecs), 15, 1800),
+      poll_interval_millis: clampNumber(Math.round(pollIntervalMillis), 250, 5000),
+      record_window_titles: recordWindowTitles,
+      record_page_titles: recordPageTitles,
+      ignored_apps: parseConfigList(ignoredAppsText),
+      ignored_domains: parseConfigList(ignoredDomainsText),
+    })
+  }
+
   return (
     <section className="page-stack">
       <div className="page-content-layout">
@@ -1006,7 +1088,7 @@ function SettingsPage(props: {
 
           <div className="panel page-panel settings-card">
             <p className="section-kicker">启动</p>
-            <h2>启动与当前视图</h2>
+            <h2>启动与采集配置</h2>
             <dl className="settings-list">
               <div>
                 <dt>开机自启动</dt>
@@ -1049,7 +1131,83 @@ function SettingsPage(props: {
               </div>
             </dl>
 
+            <div className="settings-config-grid" role="group" aria-label="采集阈值和过滤设置">
+              <label className="settings-config-field">
+                <span>空闲阈值（秒）</span>
+                <input
+                  type="number"
+                  min={15}
+                  max={1800}
+                  step={5}
+                  value={idleThresholdSecs}
+                  onChange={(event) => setIdleThresholdSecs(Number(event.target.value) || 0)}
+                />
+              </label>
+
+              <label className="settings-config-field">
+                <span>轮询间隔（毫秒）</span>
+                <input
+                  type="number"
+                  min={250}
+                  max={5000}
+                  step={50}
+                  value={pollIntervalMillis}
+                  onChange={(event) => setPollIntervalMillis(Number(event.target.value) || 0)}
+                />
+              </label>
+
+              <label className="settings-config-check">
+                <input
+                  type="checkbox"
+                  checked={recordWindowTitles}
+                  onChange={(event) => setRecordWindowTitles(event.target.checked)}
+                />
+                记录窗口标题
+              </label>
+
+              <label className="settings-config-check">
+                <input
+                  type="checkbox"
+                  checked={recordPageTitles}
+                  onChange={(event) => setRecordPageTitles(event.target.checked)}
+                />
+                记录页面标题
+              </label>
+
+              <label className="settings-config-field is-wide">
+                <span>忽略应用（每行一个，如 chrome.exe）</span>
+                <textarea
+                  rows={4}
+                  value={ignoredAppsText}
+                  onChange={(event) => setIgnoredAppsText(event.target.value)}
+                />
+              </label>
+
+              <label className="settings-config-field is-wide">
+                <span>忽略域名（每行一个，如 example.com）</span>
+                <textarea
+                  rows={4}
+                  value={ignoredDomainsText}
+                  onChange={(event) => setIgnoredDomainsText(event.target.value)}
+                />
+              </label>
+
+              <div className="settings-config-actions">
+                <button
+                  type="button"
+                  className="settings-save-button"
+                  disabled={props.savingConfig}
+                  onClick={() => {
+                    void handleSaveConfig()
+                  }}
+                >
+                  {props.savingConfig ? '保存中…' : '保存采集配置'}
+                </button>
+              </div>
+            </div>
+
             {props.settingsError ? <div className="settings-error">{props.settingsError}</div> : null}
+            {props.settingsNotice ? <div className="settings-notice">{props.settingsNotice}</div> : null}
           </div>
         </div>
 
@@ -1419,6 +1577,20 @@ function formatDateKey(date: Date) {
 
 function formatWeekday(date: Date) {
   return ['一', '二', '三', '四', '五', '六', '日'][(date.getUTCDay() + 6) % 7]
+}
+
+function parseConfigList(value: string) {
+  const unique = new Set<string>()
+
+  value
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .forEach((item) => {
+      unique.add(item)
+    })
+
+  return Array.from(unique.values())
 }
 
 export default App

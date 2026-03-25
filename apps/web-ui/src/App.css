@@ -1025,6 +1025,84 @@
   font-size: 0.78rem;
 }
 
+.settings-notice {
+  margin-top: 10px;
+  color: #03624c;
+  font-family: var(--mono-family);
+  font-size: 0.78rem;
+}
+
+.settings-config-grid {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.settings-config-field {
+  display: grid;
+  gap: 6px;
+}
+
+.settings-config-field span {
+  color: var(--text-dim);
+  font-family: var(--mono-family);
+  font-size: 0.68rem;
+}
+
+.settings-config-field input,
+.settings-config-field textarea {
+  width: 100%;
+  border: 1px solid var(--input-border);
+  border-radius: 10px;
+  padding: 9px 10px;
+  font: inherit;
+  font-family: var(--mono-family);
+  background: var(--input-bg);
+  color: var(--text-main);
+}
+
+.settings-config-field textarea {
+  resize: vertical;
+  min-height: 92px;
+}
+
+.settings-config-field.is-wide {
+  grid-column: 1 / -1;
+}
+
+.settings-config-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-main);
+  font-family: var(--mono-family);
+  font-size: 0.74rem;
+}
+
+.settings-config-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.settings-save-button {
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid rgba(71, 110, 187, 0.32);
+  border-radius: 10px;
+  background: rgba(236, 244, 255, 0.98);
+  color: #21406d;
+  font: inherit;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.settings-save-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .timeline-panel {
   display: flex;
   flex-direction: column;

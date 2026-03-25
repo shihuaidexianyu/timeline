@@ -61,10 +61,12 @@ export function TimelineChart(props: {
   viewStartSec: number
   viewEndSec: number
   baseDate?: string
+  highlightedSegmentId?: string | null
   interactiveZoom?: boolean
   showTable?: boolean
   minViewHours?: number
   maxViewHours?: number
+  onSegmentHover?: (segmentId: string | null) => void
   onViewportChange?: (startSec: number, endSec: number) => void
 }) {
   const overviewRef = useRef<HTMLDivElement | null>(null)
@@ -300,17 +302,28 @@ export function TimelineChart(props: {
                         ((clipped.startSec - props.viewStartSec) / visibleDuration) * 100
                       const widthPct =
                         ((clipped.endSec - clipped.startSec) / visibleDuration) * 100
+                      const isHighlighted =
+                        props.highlightedSegmentId !== null &&
+                        props.highlightedSegmentId !== undefined &&
+                        props.highlightedSegmentId === segment.id
+                      const shouldDimForHighlight =
+                        (props.highlightedSegmentId !== null &&
+                          props.highlightedSegmentId !== undefined &&
+                          !isHighlighted) ||
+                        shouldDim
 
                       return (
                         <span
                           key={segment.id}
-                          className={`timeline-bar ${shouldDim ? 'is-dimmed' : ''}`}
+                          className={`timeline-bar ${shouldDimForHighlight ? 'is-dimmed' : ''} ${isHighlighted ? 'is-highlighted' : ''}`}
                           style={{
                             left: `${leftPct}%`,
                             width: `${Math.max(widthPct, 0.7)}%`,
                             backgroundColor: segment.color,
                           }}
                           title={buildTooltipText(segment)}
+                          onPointerEnter={() => props.onSegmentHover?.(segment.id)}
+                          onPointerLeave={() => props.onSegmentHover?.(null)}
                         />
                       )
                     })}

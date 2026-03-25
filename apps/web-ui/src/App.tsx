@@ -358,6 +358,7 @@ function App() {
                 dashboard={dashboard}
                 appFilter={appFilter}
                 selectedDate={resolvedSelectedDate}
+                timezone={agentTimezone ?? timeline?.timezone ?? null}
                 viewStartHour={viewStartHour}
                 viewStartSec={viewStartSec}
                 viewEndSec={viewEndSec}
@@ -777,6 +778,7 @@ function TimelinePage(props: {
   dashboard: DashboardModel
   appFilter: DashboardFilter
   selectedDate: string
+  timezone: string | null
   viewStartHour: number
   viewStartSec: number
   viewEndSec: number
@@ -784,6 +786,7 @@ function TimelinePage(props: {
   setZoomHours: (hours: number) => void
   setViewStartHour: (hours: number) => void
 }) {
+  const [hoveredFocusSegmentId, setHoveredFocusSegmentId] = useState<string | null>(null)
   const visibleFocusItems = useMemo(
     () =>
       buildVisibleFocusItems(
@@ -816,6 +819,7 @@ function TimelinePage(props: {
     [props.appFilter, props.dashboard.focusSegments, props.dashboard.presenceSegments],
   )
   const zoomPresets = [0.25, 0.5, 1, 4]
+  const hourAnchors = [9, 13, 18]
   const panStepHours = props.zoomHours <= 0.25 ? 1 / 12 : Math.max(1 / 12, props.zoomHours / 2)
   const windowDurationSec = props.viewEndSec - props.viewStartSec
   const visibleAppCount = useMemo(
@@ -859,6 +863,14 @@ function TimelinePage(props: {
 
   function shiftWindow(direction: -1 | 1) {
     applyWindow(props.zoomHours, props.viewStartHour + direction * panStepHours)
+  }
+
+  function jumpToHour(centerHour: number) {
+    applyWindow(props.zoomHours, centerHour - props.zoomHours / 2)
+  }
+
+  function jumpToNow() {
+    jumpToHour(currentHourInTimezone(props.timezone))
   }
 
   return (
@@ -908,6 +920,13 @@ function TimelinePage(props: {
                 <button
                   type="button"
                   className="timeline-control-button"
+                  onClick={jumpToNow}
+                >
+                  当前
+                </button>
+                <button
+                  type="button"
+                  className="timeline-control-button"
                   onClick={() => applyWindow(props.zoomHours, 0)}
                 >
                   起点
@@ -919,6 +938,20 @@ function TimelinePage(props: {
                 >
                   向后
                 </button>
+              </div>
+
+              <div className="timeline-control-group timeline-control-group-anchor">
+                <span className="timeline-control-label">锚点</span>
+                {hourAnchors.map((hour) => (
+                  <button
+                    key={`anchor-${hour}`}
+                    type="button"
+                    className="timeline-control-button"
+                    onClick={() => jumpToHour(hour)}
+                  >
+                    {formatHourLabel(hour)}
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -950,9 +983,11 @@ function TimelinePage(props: {
               viewStartSec={props.viewStartSec}
               viewEndSec={props.viewEndSec}
               baseDate={props.selectedDate}
+              highlightedSegmentId={hoveredFocusSegmentId}
               interactiveZoom
               minViewHours={MIN_ZOOM_HOURS}
               maxViewHours={MAX_ZOOM_HOURS}
+              onSegmentHover={setHoveredFocusSegmentId}
               onViewportChange={(nextStartSec, nextEndSec) => {
                 const nextZoom = clampZoomHours(
                   normalizeZoomHours((nextEndSec - nextStartSec) / 3600),
@@ -985,6 +1020,8 @@ function TimelinePage(props: {
                 <FocusSegmentList
                   segments={visibleFocusItems}
                   browserDomainBySegmentId={browserDomainBySegmentId}
+                  hoveredSegmentId={hoveredFocusSegmentId}
+                  onHoverSegment={setHoveredFocusSegmentId}
                 />
               </div>
             </div>
@@ -1119,6 +1156,8 @@ function SettingsPage(props: {
 const FocusSegmentList = memo(function FocusSegmentList(props: {
   segments: ChartSegment[]
   browserDomainBySegmentId: Map<string, string>
+  hoveredSegmentId: string | null
+  onHoverSegment: (segmentId: string | null) => void
 }) {
   if (props.segments.length === 0) {
     return <div className="empty-card">暂无记录</div>
@@ -1130,8 +1169,10 @@ const FocusSegmentList = memo(function FocusSegmentList(props: {
         return (
           <article
             key={segment.id}
-            className="detail-segment-item"
+            className={`detail-segment-item ${props.hoveredSegmentId === segment.id ? 'is-hovered' : ''}`}
             title={`${segment.label}\n${formatClockRange(segment.startSec, segment.endSec)}`}
+            onMouseEnter={() => props.onHoverSegment(segment.id)}
+            onMouseLeave={() => props.onHoverSegment(null)}
           >
             <span className="detail-segment-row">
               <span className="detail-segment-name">

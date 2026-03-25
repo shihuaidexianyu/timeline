@@ -998,8 +998,8 @@
 
 .timeline-control-bar {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  align-items: flex-start;
+  justify-content: flex-start;
   flex-wrap: wrap;
   gap: 10px 16px;
   margin-bottom: 12px;
@@ -1019,6 +1019,10 @@
   padding: 4px 6px;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.72);
+}
+
+.timeline-control-group-anchor {
+  margin-left: auto;
 }
 
 .timeline-control-label {
@@ -1106,7 +1110,7 @@
 }
 
 .timeline-page-layout {
-  --timeline-panel-height: clamp(560px, calc(100vh - 92px), 680px);
+  --timeline-panel-height: clamp(640px, calc(100vh - 72px), 820px);
   grid-template-columns: minmax(0, 1.32fr) minmax(320px, 0.86fr);
   align-items: stretch;
 }
@@ -1209,6 +1213,11 @@
   box-shadow: inset 3px 0 0 #2f6fdb;
 }
 
+.detail-segment-item.is-hovered {
+  background: rgba(233, 241, 255, 0.88);
+  box-shadow: inset 3px 0 0 #2f6fdb;
+}
+
 .detail-segment-row {
   display: flex;
   align-items: center;
@@ -1290,6 +1299,9 @@
 .timeline-devtools {
   --timeline-label-width: 176px;
   --timeline-marker-color: rgba(42, 93, 189, 0.72);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   border: 1px solid rgba(145, 159, 180, 0.18);
   border-radius: 16px;
   background:
@@ -1408,6 +1420,8 @@
   border-bottom: 1px solid rgba(145, 159, 180, 0.16);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
 }
 
 .timeline-axis {
@@ -1501,7 +1515,8 @@
 .timeline-waterfall-body {
   display: flex;
   flex-direction: column;
-  max-height: 500px;
+  flex: 1;
+  max-height: none;
   overflow: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
@@ -1590,6 +1605,15 @@
 
 .timeline-bar.is-dimmed {
   opacity: 0.2;
+}
+
+.timeline-bar.is-highlighted {
+  opacity: 1;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.3),
+    0 0 0 1px rgba(15, 37, 73, 0.2),
+    0 0 0 2px rgba(47, 111, 219, 0.24);
+  filter: saturate(1.08) brightness(1.02);
 }
 
 .timeline-inspector-line {
@@ -2304,6 +2328,10 @@
 
   .timeline-control-bar {
     flex-direction: column;
+  }
+
+  .timeline-control-group-anchor {
+    margin-left: 0;
   }
 
   .weekly-bar-track {

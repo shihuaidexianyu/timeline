@@ -1,7 +1,7 @@
 /* Donut chart rendered with ECharts so tooltip, legend, and selection share one engine. */
 
 import { useMemo } from 'react'
-import ReactEChartsCore from 'echarts-for-react/lib/core'
+import ReactEChartsCoreImport from 'echarts-for-react/lib/core'
 import * as echarts from 'echarts/core'
 import { PieChart } from 'echarts/charts'
 import { GraphicComponent, TooltipComponent } from 'echarts/components'
@@ -15,6 +15,14 @@ import {
 } from '../lib/chart-model'
 
 echarts.use([PieChart, TooltipComponent, GraphicComponent, SVGRenderer])
+
+const ReactEChartsCore = (
+  typeof ReactEChartsCoreImport === 'object' &&
+    ReactEChartsCoreImport !== null &&
+    'default' in ReactEChartsCoreImport
+    ? (ReactEChartsCoreImport as { default: unknown }).default
+    : ReactEChartsCoreImport
+) as React.ComponentType<Record<string, unknown>>
 
 const LABEL_COLOR = '#1d2c43'
 const MUTED_COLOR = '#6f839f'

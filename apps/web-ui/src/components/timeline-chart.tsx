@@ -61,6 +61,9 @@ export function TimelineChart(props: {
   viewStartSec: number
   viewEndSec: number
   baseDate?: string
+  windowLabel?: string
+  windowDurationLabel?: string
+  windowItemCount?: number
   highlightedSegmentId?: string | null
   interactiveZoom?: boolean
   showTable?: boolean
@@ -186,35 +189,40 @@ export function TimelineChart(props: {
       <div className="timeline-devtools-head">
         <div className="timeline-devtools-summary">
           <strong>
-            {formatClock(props.viewStartSec)} - {formatClock(props.viewEndSec)}
+            {props.windowLabel ?? `${formatClock(props.viewStartSec)} - ${formatClock(props.viewEndSec)}`}
           </strong>
         </div>
 
-        <div className={`timeline-inspector-summary ${hoveredSec === null ? 'is-idle' : ''}`}>
-          <span className="timeline-inspector-time">
-            {hoveredSec === null ? '--:--' : formatClock(hoveredSec)}
-          </span>
-          <div className="timeline-inspector-items">
-            {hoveredSec !== null && inspectionItems.length > 0 ? (
-              inspectionItems.map((item) => (
-                <span key={item.id} className="timeline-inspector-item" title={item.detail}>
-                  <i style={{ backgroundColor: item.color }} />
-                  <strong>{item.label}</strong>
-                  <small>{item.typeLabel}</small>
-                </span>
-              ))
-            ) : (
-              <span className="timeline-inspector-empty">
-                {hoveredSec === null ? '移动到时间线查看详情' : '该时刻没有记录'}
-              </span>
-            )}
+        {hoveredSec === null ? (
+          <div className="timeline-devtools-meta">
+            <span className="timeline-devtools-pill">{props.windowDurationLabel ?? formatDuration(visibleDuration)}</span>
+            {props.windowItemCount !== undefined ? (
+              <span className="timeline-devtools-pill">片段 {props.windowItemCount}</span>
+            ) : null}
           </div>
-        </div>
+        ) : (
+          <div className="timeline-inspector-summary">
+            <span className="timeline-inspector-time">{formatClock(hoveredSec)}</span>
+            <div className="timeline-inspector-items">
+              {inspectionItems.length > 0 ? (
+                inspectionItems.map((item) => (
+                  <span key={item.id} className="timeline-inspector-item" title={item.detail}>
+                    <i style={{ backgroundColor: item.color }} />
+                    <strong>{item.label}</strong>
+                    <small>{item.typeLabel}</small>
+                  </span>
+                ))
+              ) : (
+                <span className="timeline-inspector-empty">该时刻没有记录</span>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="timeline-waterfall">
         <div className="timeline-axis">
-          <div className="timeline-axis-label">名称</div>
+          <div className="timeline-axis-label">时间</div>
           <div
             ref={axisTrackRef}
             className="timeline-axis-track"
@@ -555,9 +563,11 @@ function buildTicks(viewStartSec: number, viewEndSec: number, trackWidth: number
   const duration = viewEndSec - viewStartSec
   const step = chooseTickStep(duration, trackWidth)
   const first = Math.ceil(viewStartSec / step) * step
+  const rawTicks: Array<{ seconds: number; label: string; positionPct: number }> = []
   const ticks: Array<{ seconds: number; label: string; positionPct: number }> = []
+  const minSpacingPx = duration <= 6 * 3600 ? 72 : 56
 
-  ticks.push({
+  rawTicks.push({
     seconds: viewStartSec,
     label: formatTickLabel(viewStartSec, step),
     positionPct: 0,
@@ -569,11 +579,23 @@ function buildTicks(viewStartSec: number, viewEndSec: number, trackWidth: number
       continue
     }
 
-    ticks.push({
+    rawTicks.push({
       seconds,
       label: formatTickLabel(seconds, step),
       positionPct: ((seconds - viewStartSec) / duration) * 100,
     })
+  }
+
+  rawTicks.sort((left, right) => left.positionPct - right.positionPct)
+
+  let lastAcceptedPx = Number.NEGATIVE_INFINITY
+  for (const tick of rawTicks) {
+    const currentPx = (tick.positionPct / 100) * Math.max(trackWidth, 1)
+    if (currentPx - lastAcceptedPx < minSpacingPx) {
+      continue
+    }
+    ticks.push(tick)
+    lastAcceptedPx = currentPx
   }
 
   return ticks

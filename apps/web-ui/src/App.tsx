@@ -873,6 +873,9 @@ function TimelinePage(props: {
                 viewStartSec={props.viewStartSec}
                 viewEndSec={props.viewEndSec}
                 baseDate={props.selectedDate}
+                windowLabel={windowLabel}
+                windowDurationLabel={`窗口 ${formatDuration(windowDurationSec)}`}
+                windowItemCount={visibleFocusItems.length}
                 highlightedSegmentId={hoveredFocusSegmentId}
                 interactiveZoom={false}
                 minViewHours={MIN_ZOOM_HOURS}

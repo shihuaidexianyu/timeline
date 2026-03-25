@@ -1451,6 +1451,27 @@
   letter-spacing: -0.01em;
 }
 
+.timeline-devtools-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.timeline-devtools-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(145, 159, 180, 0.2);
+  border-radius: 999px;
+  background: rgba(248, 250, 255, 0.96);
+  color: #5f7190;
+  font-family: var(--mono-family);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
 .timeline-inspector-summary {
   display: flex;
   align-items: center;
@@ -1459,10 +1480,6 @@
   flex-wrap: nowrap;
   max-width: min(62%, 760px);
   min-height: 30px;
-}
-
-.timeline-inspector-summary.is-idle {
-  opacity: 0.78;
 }
 
 .timeline-inspector-time {

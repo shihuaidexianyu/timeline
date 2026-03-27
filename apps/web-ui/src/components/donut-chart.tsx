@@ -55,6 +55,7 @@ export function DonutChart(props: {
       tooltip: {
         trigger: 'item',
         appendToBody: true,
+        transitionDuration: 0.08,
         backgroundColor: 'rgba(255, 255, 255, 0.98)',
         borderColor: 'rgba(145, 159, 180, 0.28)',
         borderWidth: 1,
@@ -257,10 +258,15 @@ export function CompactDonutChart(props: {
 
   const option = useMemo<EChartsOption>(() => {
     return {
-      animation: false,
+      animation: true,
+      animationDuration: 180,
+      animationDurationUpdate: 180,
+      animationEasing: 'cubicOut',
+      animationEasingUpdate: 'cubicOut',
       tooltip: {
         trigger: 'item',
         appendToBody: true,
+        transitionDuration: 0.08,
         backgroundColor: 'rgba(255, 255, 255, 0.98)',
         borderColor: 'rgba(145, 159, 180, 0.28)',
         borderWidth: 1,
@@ -285,9 +291,11 @@ export function CompactDonutChart(props: {
       },
       series: [
         {
+          name: '状态分布',
           type: 'pie',
-          radius: ['58%', '78%'],
-          center: ['50%', '50%'],
+          radius: ['56%', '76%'],
+          center: [PIE_CENTER_X, '50%'],
+          selectedMode: false,
           avoidLabelOverlap: true,
           label: { show: false },
           labelLine: { show: false },
@@ -297,11 +305,10 @@ export function CompactDonutChart(props: {
           },
           emphasis: {
             scale: true,
-            scaleSize: 12,
+            scaleSize: 10,
             itemStyle: {
-              shadowBlur: 18,
-              shadowOffsetY: 4,
-              shadowColor: 'rgba(30, 53, 91, 0.22)',
+              shadowBlur: 14,
+              shadowColor: 'rgba(28, 50, 86, 0.2)',
             },
           },
           data: displaySlices.map((slice) => {
@@ -312,8 +319,6 @@ export function CompactDonutChart(props: {
               value: slice.value,
               name: slice.label,
               raw: slice,
-              selected: isActive,
-              selectedOffset: 0,
               itemStyle: {
                 color: slice.color,
                 opacity: shouldDim ? 0.24 : 0.96,
@@ -326,6 +331,7 @@ export function CompactDonutChart(props: {
       graphic: [
         {
           type: 'text',
+          silent: true,
           left: 'center',
           top: props.footerLabel ? '38%' : '41%',
           style: {
@@ -337,6 +343,7 @@ export function CompactDonutChart(props: {
         },
         {
           type: 'text',
+          silent: true,
           left: 'center',
           top: props.footerLabel ? '49%' : '53%',
           style: {
@@ -350,6 +357,7 @@ export function CompactDonutChart(props: {
           ? [
             {
               type: 'text' as const,
+              silent: true,
               left: 'center',
               top: '61%',
               style: {

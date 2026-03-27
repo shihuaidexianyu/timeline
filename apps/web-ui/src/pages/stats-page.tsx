@@ -240,10 +240,6 @@ function FocusBalanceCard(props: {
     lockedSeconds: number
     refreshing: boolean
 }) {
-    const activeRatio =
-        (props.dashboard?.summary.focusSeconds ?? 0) > 0
-            ? (props.dashboard?.summary.activeSeconds ?? 0) / (props.dashboard?.summary.focusSeconds ?? 0)
-            : 0
     const [selectedPresenceKey, setSelectedPresenceKey] = useState<'active' | 'idle' | 'locked'>('active')
     const selectedPresenceLabel =
         selectedPresenceKey === 'active' ? '活跃' : selectedPresenceKey === 'idle' ? '空闲' : '锁定'
@@ -254,6 +250,10 @@ function FocusBalanceCard(props: {
                 ? props.idleSeconds
                 : props.lockedSeconds
     const presenceTotal = props.activeSeconds + props.idleSeconds + props.lockedSeconds
+    const selectedPresenceRatio = presenceTotal > 0 ? selectedPresenceValue / presenceTotal : 0
+    const selectedPresenceLongestBlockSeconds = props.dashboard?.presenceSegments
+        .filter((segment) => segment.key === selectedPresenceKey)
+        .reduce((max, segment) => Math.max(max, segment.durationSec), 0) ?? 0
     const presenceSlices: DonutSlice[] = [
         {
             id: 'presence-active',
@@ -261,7 +261,7 @@ function FocusBalanceCard(props: {
             label: '活跃',
             value: props.activeSeconds,
             percentage: presenceTotal === 0 ? 0 : (props.activeSeconds / presenceTotal) * 100,
-            color: 'var(--presence-active)',
+            color: '#2f6fed',
         },
         {
             id: 'presence-idle',
@@ -269,7 +269,7 @@ function FocusBalanceCard(props: {
             label: '空闲',
             value: props.idleSeconds,
             percentage: presenceTotal === 0 ? 0 : (props.idleSeconds / presenceTotal) * 100,
-            color: 'var(--presence-idle)',
+            color: '#14b8a6',
         },
         {
             id: 'presence-locked',
@@ -277,7 +277,7 @@ function FocusBalanceCard(props: {
             label: '锁定',
             value: props.lockedSeconds,
             percentage: presenceTotal === 0 ? 0 : (props.lockedSeconds / presenceTotal) * 100,
-            color: 'var(--presence-locked)',
+            color: '#8da0b6',
         },
     ]
 
@@ -298,7 +298,7 @@ function FocusBalanceCard(props: {
                             slices={presenceSlices}
                             totalLabel={formatDuration(selectedPresenceValue)}
                             secondaryLabel={selectedPresenceLabel}
-                            footerLabel={`应用 ${formatDuration(props.dashboard?.summary.focusSeconds ?? 0)}`}
+                            footerLabel={`总状态 ${formatDuration(presenceTotal)}`}
                             selectedKey={selectedPresenceKey}
                             onSelectKey={(key) => {
                                 if (key === 'active' || key === 'idle' || key === 'locked') {
@@ -378,12 +378,12 @@ function FocusBalanceCard(props: {
                 ) : (
                     <>
                         <div className="focus-metric-card">
-                            <span>最长连续</span>
-                            <strong>{formatDuration(props.dashboard?.summary.longestFocusSeconds ?? 0)}</strong>
+                            <span>{selectedPresenceLabel}最长连续</span>
+                            <strong>{formatDuration(selectedPresenceLongestBlockSeconds)}</strong>
                         </div>
                         <div className="focus-metric-card">
-                            <span>活跃占比</span>
-                            <strong>{formatPercent(activeRatio)}</strong>
+                            <span>{selectedPresenceLabel}占比</span>
+                            <strong>{formatPercent(selectedPresenceRatio)}</strong>
                         </div>
                     </>
                 )}

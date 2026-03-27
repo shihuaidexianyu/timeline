@@ -2553,6 +2553,511 @@
   color: #f8fbff;
 }
 
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.skeleton-block {
+  display: block;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgba(222, 230, 241, 0.72) 0%,
+    rgba(244, 248, 255, 0.96) 50%,
+    rgba(222, 230, 241, 0.72) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+.skeleton-inline {
+  height: 0.82rem;
+}
+
+.donut-card-skeleton,
+.compact-donut-skeleton,
+.calendar-panel-skeleton,
+.timeline-devtools-skeleton,
+.timeline-clock-card-skeleton,
+.settings-config-grid-skeleton,
+.detail-segment-list-skeleton,
+.monitor-card-skeleton {
+  pointer-events: none;
+}
+
+.donut-card-skeleton {
+  display: grid;
+  gap: 14px;
+  flex: 1;
+}
+
+.donut-visual-skeleton {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 10px;
+  min-height: 288px;
+  padding-inline: 14px;
+}
+
+.donut-ring-skeleton {
+  width: 182px;
+  height: 182px;
+  border-radius: 50%;
+}
+
+.donut-ring-skeleton-compact {
+  width: 152px;
+  height: 152px;
+}
+
+.donut-total-skeleton {
+  width: 96px;
+}
+
+.donut-total-skeleton-compact {
+  width: 88px;
+}
+
+.donut-caption-skeleton {
+  width: 66px;
+}
+
+.donut-caption-skeleton-compact {
+  width: 74px;
+}
+
+.donut-footer-skeleton {
+  width: 104px;
+}
+
+.ranking-list-skeleton {
+  gap: 8px;
+}
+
+.ranking-row-skeleton {
+  cursor: default;
+}
+
+.skeleton-ranking-name {
+  width: 46%;
+}
+
+.skeleton-ranking-value {
+  width: 64px;
+}
+
+.skeleton-ranking-percent {
+  width: 42px;
+}
+
+.weekly-summary-skeleton {
+  display: grid;
+  gap: 6px;
+}
+
+.skeleton-stat-value {
+  width: 92px;
+  height: 1rem;
+}
+
+.skeleton-stat-caption {
+  width: 152px;
+}
+
+.weekly-chart-shell-skeleton {
+  align-items: stretch;
+}
+
+.weekly-chart-main-skeleton {
+  min-height: 248px;
+}
+
+.weekly-bars-skeleton {
+  min-height: 236px;
+}
+
+.weekly-bar-column-skeleton {
+  align-self: end;
+}
+
+.weekly-bar-track-skeleton {
+  width: 100%;
+  max-width: 34px;
+  height: 196px;
+  border-radius: 10px;
+}
+
+.skeleton-weekday-label {
+  width: 28px;
+}
+
+.skeleton-axis-label {
+  width: 32px;
+}
+
+.presence-legend-item-skeleton {
+  cursor: default;
+}
+
+.skeleton-legend-title {
+  width: 52px;
+}
+
+.skeleton-legend-value {
+  width: 76px;
+  height: 0.96rem;
+}
+
+.focus-metric-card-skeleton {
+  justify-content: space-between;
+}
+
+.skeleton-metric-label {
+  width: 58px;
+}
+
+.skeleton-metric-value-block {
+  width: 84px;
+  height: 1rem;
+}
+
+.skeleton-metric-value {
+  display: block;
+}
+
+.calendar-nav-button-skeleton {
+  border: none;
+  background: none;
+}
+
+.calendar-header-copy-skeleton {
+  align-items: center;
+}
+
+.skeleton-calendar-title {
+  width: 78px;
+  height: 1rem;
+}
+
+.skeleton-calendar-subtitle {
+  width: 150px;
+}
+
+.skeleton-calendar-weekday {
+  justify-self: center;
+  width: 18px;
+}
+
+.calendar-cell-skeleton {
+  cursor: default;
+  background: rgba(246, 249, 255, 0.92);
+}
+
+.calendar-legend-skeleton {
+  gap: 12px;
+}
+
+.calendar-legend-swatch-skeleton {
+  border-color: transparent;
+  opacity: 0.55;
+}
+
+.skeleton-calendar-legend-label {
+  width: 22px;
+}
+
+.calendar-selection-summary-skeleton {
+  gap: 6px;
+}
+
+.skeleton-calendar-selection-title {
+  width: 92px;
+  height: 0.92rem;
+}
+
+.skeleton-calendar-selection-copy {
+  width: 126px;
+}
+
+.timeline-devtools-skeleton {
+  min-height: 420px;
+}
+
+.skeleton-timeline-window {
+  width: 132px;
+  height: 1rem;
+}
+
+.skeleton-timeline-pill {
+  width: 78px;
+}
+
+.timeline-waterfall-skeleton {
+  display: grid;
+  gap: 14px;
+}
+
+.timeline-axis-skeleton {
+  align-items: start;
+}
+
+.timeline-axis-track-skeleton {
+  position: relative;
+  min-height: 56px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding-top: 8px;
+}
+
+.skeleton-axis-title {
+  width: 32px;
+}
+
+.skeleton-timeline-tick {
+  width: 32px;
+}
+
+.timeline-lane-stack-skeleton {
+  display: grid;
+  gap: 12px;
+}
+
+.timeline-row-skeleton {
+  display: grid;
+  grid-template-columns: var(--timeline-label-width, 132px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.skeleton-timeline-row-label {
+  width: 44px;
+}
+
+.timeline-row-track-skeleton {
+  position: relative;
+  min-height: 88px;
+  border: 1px solid rgba(145, 159, 180, 0.14);
+  border-radius: 14px;
+  background: rgba(248, 250, 255, 0.88);
+  overflow: hidden;
+}
+
+.timeline-segment-skeleton {
+  position: absolute;
+  height: 18px;
+  border-radius: 999px;
+}
+
+.timeline-segment-skeleton-0 {
+  top: 16px;
+  left: 4%;
+  width: 18%;
+}
+
+.timeline-segment-skeleton-1 {
+  top: 18px;
+  left: 30%;
+  width: 26%;
+}
+
+.timeline-segment-skeleton-2 {
+  top: 50px;
+  left: 12%;
+  width: 20%;
+}
+
+.timeline-segment-skeleton-3 {
+  top: 48px;
+  left: 42%;
+  width: 16%;
+}
+
+.timeline-segment-skeleton-4 {
+  top: 22px;
+  right: 8%;
+  width: 14%;
+}
+
+.timeline-clock-shell-skeleton {
+  display: grid;
+  place-items: center;
+}
+
+.timeline-clock-face-skeleton {
+  width: min(100%, 292px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+}
+
+.timeline-clock-footer-skeleton {
+  align-items: center;
+}
+
+.skeleton-clock-title {
+  width: 112px;
+  height: 0.92rem;
+}
+
+.skeleton-clock-subtitle {
+  width: 88px;
+}
+
+.skeleton-clock-copy {
+  width: 150px;
+}
+
+.skeleton-clock-copy-short {
+  width: 120px;
+}
+
+.detail-segment-item-skeleton {
+  cursor: default;
+}
+
+.skeleton-detail-title {
+  width: 48%;
+}
+
+.skeleton-detail-domain {
+  width: 22%;
+}
+
+.skeleton-detail-time {
+  width: 92px;
+}
+
+.timeline-snapshot-value-skeleton {
+  display: block;
+}
+
+.skeleton-snapshot-value {
+  width: 78px;
+  height: 0.96rem;
+}
+
+.skeleton-snapshot-copy {
+  width: 94px;
+}
+
+.timeline-meta-pill-skeleton {
+  min-width: 88px;
+}
+
+.skeleton-meta-pill {
+  width: 62px;
+}
+
+.skeleton-detail-count {
+  width: 26px;
+}
+
+.settings-skeleton-row {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(145, 159, 180, 0.18);
+}
+
+.skeleton-settings-label {
+  width: 72px;
+}
+
+.skeleton-settings-value {
+  width: 66%;
+}
+
+.settings-config-field-skeleton {
+  gap: 8px;
+}
+
+.skeleton-field-label {
+  width: 88px;
+}
+
+.skeleton-field-help {
+  width: 72%;
+}
+
+.skeleton-input {
+  height: 40px;
+  border-radius: 10px;
+}
+
+.settings-config-check-skeleton {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.skeleton-checkbox {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  border-radius: 4px;
+}
+
+.settings-config-check-copy {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+}
+
+.skeleton-check-title {
+  width: 92px;
+}
+
+.skeleton-check-help {
+  width: 82%;
+}
+
+.skeleton-textarea {
+  min-height: 92px;
+  border-radius: 10px;
+}
+
+.settings-config-actions-skeleton {
+  justify-content: flex-end;
+}
+
+.skeleton-button {
+  width: 116px;
+  height: 34px;
+  border-radius: 10px;
+}
+
+.skeleton-monitor-title {
+  width: 78px;
+}
+
+.skeleton-monitor-badge {
+  width: 52px;
+}
+
+.skeleton-monitor-line {
+  width: 92%;
+}
+
+.skeleton-monitor-line-short {
+  width: 58%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-block {
+    animation: none;
+  }
+}
+
 @media (max-width: 1280px) {
 
   .stats-overview-grid,

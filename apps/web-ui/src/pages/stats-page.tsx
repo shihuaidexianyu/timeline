@@ -1,4 +1,4 @@
-import { Suspense, useState } from 'react'
+import { useState } from 'react'
 import type { DaySummary, PeriodSummaryResponse } from '../api'
 import { CalendarGrid } from '../components/calendar-grid'
 import { CompactDonutChart, DonutChart } from '../components/donut-chart'
@@ -18,7 +18,8 @@ export type WeekBarDatum = {
 }
 
 export function StatsPage(props: {
-    dashboard: DashboardModel
+    dashboard: DashboardModel | null
+    loading: boolean
     appFilter: DashboardFilter
     domainFilter: DashboardFilter
     setAppFilter: (value: DashboardFilter) => void
@@ -37,13 +38,14 @@ export function StatsPage(props: {
     onSelectDate: (date: string) => void
 }) {
     const presenceByKey = new Map(
-        props.dashboard.presenceSlices.map((slice) => [slice.key, slice.value]),
+        (props.dashboard?.presenceSlices ?? []).map((slice) => [slice.key, slice.value]),
     )
 
     return (
         <section className="page-stack">
             <section className="stats-overview-grid">
                 <WeeklyRhythmCard
+                    loading={props.loading}
                     periodSummary={props.periodSummary}
                     weekBars={props.weekBars}
                     refreshing={props.isPeriodRefreshing}
@@ -51,6 +53,7 @@ export function StatsPage(props: {
                 />
                 <FocusBalanceCard
                     dashboard={props.dashboard}
+                    loading={props.loading}
                     activeSeconds={presenceByKey.get('active') ?? 0}
                     idleSeconds={presenceByKey.get('idle') ?? 0}
                     lockedSeconds={presenceByKey.get('locked') ?? 0}
@@ -66,16 +69,15 @@ export function StatsPage(props: {
                         </div>
                         <RefreshBadge active={props.isTimelineRefreshing} />
                     </div>
-                    <Suspense fallback={<div className="state-card">图表加载中…</div>}>
-                        <DonutChart
-                            title="应用分布"
-                            totalLabel={formatDuration(props.dashboard.summary.focusSeconds)}
-                            slices={props.dashboard.appSlices}
-                            filter={props.appFilter}
-                            filterKind="app"
-                            onSelect={props.setAppFilter}
-                        />
-                    </Suspense>
+                    <DonutChart
+                        loading={props.loading}
+                        title="应用分布"
+                        totalLabel={formatDuration(props.dashboard?.summary.focusSeconds ?? 0)}
+                        slices={props.dashboard?.appSlices ?? []}
+                        filter={props.appFilter}
+                        filterKind="app"
+                        onSelect={props.setAppFilter}
+                    />
                 </div>
 
                 <div className="panel page-panel stats-analysis-card">
@@ -85,16 +87,15 @@ export function StatsPage(props: {
                         </div>
                         <RefreshBadge active={props.isTimelineRefreshing} />
                     </div>
-                    <Suspense fallback={<div className="state-card">图表加载中…</div>}>
-                        <DonutChart
-                            title="域名分布"
-                            totalLabel={formatDuration(sumSlices(props.dashboard.domainSlices))}
-                            slices={props.dashboard.domainSlices}
-                            filter={props.domainFilter}
-                            filterKind="domain"
-                            onSelect={props.setDomainFilter}
-                        />
-                    </Suspense>
+                    <DonutChart
+                        loading={props.loading}
+                        title="域名分布"
+                        totalLabel={formatDuration(sumSlices(props.dashboard?.domainSlices ?? []))}
+                        slices={props.dashboard?.domainSlices ?? []}
+                        filter={props.domainFilter}
+                        filterKind="domain"
+                        onSelect={props.setDomainFilter}
+                    />
                 </div>
 
                 <div className="panel page-panel stats-calendar-card">
@@ -104,17 +105,16 @@ export function StatsPage(props: {
                         </div>
                         <RefreshBadge active={props.isCalendarRefreshing} />
                     </div>
-                    {props.calendarDays.length > 0 ? (
-                        <Suspense fallback={<div className="state-card">月历加载中…</div>}>
-                            <CalendarGrid
-                                month={props.calendarMonth}
-                                days={props.calendarDays}
-                                selectedDate={props.selectedDate}
-                                todayDate={props.agentToday}
-                                onSelectDate={props.onSelectDate}
-                                onMonthChange={props.onCalendarMonthChange}
-                            />
-                        </Suspense>
+                    {props.loading || props.calendarDays.length > 0 || props.isCalendarRefreshing ? (
+                        <CalendarGrid
+                            loading={props.loading || (props.isCalendarRefreshing && props.calendarDays.length === 0)}
+                            month={props.calendarMonth}
+                            days={props.calendarDays}
+                            selectedDate={props.selectedDate}
+                            todayDate={props.agentToday}
+                            onSelectDate={props.onSelectDate}
+                            onMonthChange={props.onCalendarMonthChange}
+                        />
                     ) : props.calendarError ? (
                         <div className="state-card error-card">{props.calendarError}</div>
                     ) : (
@@ -127,6 +127,7 @@ export function StatsPage(props: {
 }
 
 function WeeklyRhythmCard(props: {
+    loading: boolean
     periodSummary: PeriodSummaryResponse | null
     weekBars: WeekBarDatum[]
     refreshing: boolean
@@ -153,31 +154,67 @@ function WeeklyRhythmCard(props: {
             </div>
 
             <div className="weekly-summary-row">
-                <div>
-                    <strong>{formatDuration(weekActiveTotal)}</strong>
-                    <small>本周活跃 · 当月 {formatDuration(monthActiveTotal)}</small>
-                </div>
-                <div>
-                    <strong>{formatDuration(weekFocusTotal)}</strong>
-                    <small>本周应用 · 当月 {formatDuration(monthFocusTotal)}</small>
-                </div>
+                {props.loading ? (
+                    <>
+                        <div className="weekly-summary-skeleton">
+                            <span className="skeleton-block skeleton-inline skeleton-stat-value" />
+                            <span className="skeleton-block skeleton-inline skeleton-stat-caption" />
+                        </div>
+                        <div className="weekly-summary-skeleton">
+                            <span className="skeleton-block skeleton-inline skeleton-stat-value" />
+                            <span className="skeleton-block skeleton-inline skeleton-stat-caption" />
+                        </div>
+                    </>
+                ) : (
+                    <>
+                        <div>
+                            <strong>{formatDuration(weekActiveTotal)}</strong>
+                            <small>本周活跃 · 当月 {formatDuration(monthActiveTotal)}</small>
+                        </div>
+                        <div>
+                            <strong>{formatDuration(weekFocusTotal)}</strong>
+                            <small>本周应用 · 当月 {formatDuration(monthFocusTotal)}</small>
+                        </div>
+                    </>
+                )}
             </div>
 
-            <WeeklyBarChart bars={props.weekBars} onSelectDate={props.onSelectDate} />
+            {props.loading ? (
+                <div className="weekly-chart-shell weekly-chart-shell-skeleton" aria-hidden="true">
+                    <div className="weekly-chart-main weekly-chart-main-skeleton">
+                        <div className="weekly-bars weekly-bars-skeleton">
+                            {Array.from({ length: 7 }, (_, index) => (
+                                <div key={`weekly-skeleton-${index}`} className="weekly-bar-column weekly-bar-column-skeleton">
+                                    <span className="skeleton-block weekly-bar-track-skeleton" />
+                                    <span className="skeleton-block skeleton-inline skeleton-weekday-label" />
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    <div className="weekly-axis weekly-axis-skeleton">
+                        {Array.from({ length: 3 }, (_, index) => (
+                            <span key={`weekly-axis-${index}`} className="skeleton-block skeleton-inline skeleton-axis-label" />
+                        ))}
+                    </div>
+                </div>
+            ) : (
+                <WeeklyBarChart bars={props.weekBars} onSelectDate={props.onSelectDate} />
+            )}
         </article>
     )
 }
 
 function FocusBalanceCard(props: {
-    dashboard: DashboardModel
+    dashboard: DashboardModel | null
+    loading: boolean
     activeSeconds: number
     idleSeconds: number
     lockedSeconds: number
     refreshing: boolean
 }) {
     const activeRatio =
-        props.dashboard.summary.focusSeconds > 0
-            ? props.dashboard.summary.activeSeconds / props.dashboard.summary.focusSeconds
+        (props.dashboard?.summary.focusSeconds ?? 0) > 0
+            ? (props.dashboard?.summary.activeSeconds ?? 0) / (props.dashboard?.summary.focusSeconds ?? 0)
             : 0
     const [selectedPresenceKey, setSelectedPresenceKey] = useState<'active' | 'idle' | 'locked'>('active')
     const selectedPresenceLabel =
@@ -228,71 +265,100 @@ function FocusBalanceCard(props: {
             <div className="focus-distribution-layout">
                 <div className="showcase-donut-wrap">
                     <div className="showcase-compact-donut">
-                        <Suspense fallback={<div className="state-card">图表加载中…</div>}>
-                            <CompactDonutChart
-                                slices={presenceSlices}
-                                totalLabel={formatDuration(selectedPresenceValue)}
-                                secondaryLabel={selectedPresenceLabel}
-                                footerLabel={`应用 ${formatDuration(props.dashboard.summary.focusSeconds)}`}
-                                selectedKey={selectedPresenceKey}
-                                onSelectKey={(key) => {
-                                    if (key === 'active' || key === 'idle' || key === 'locked') {
-                                        setSelectedPresenceKey(key)
-                                    }
-                                }}
-                                height={232}
-                                emptyLabel="所选日期没有状态分布数据"
-                            />
-                        </Suspense>
+                        <CompactDonutChart
+                            loading={props.loading}
+                            slices={presenceSlices}
+                            totalLabel={formatDuration(selectedPresenceValue)}
+                            secondaryLabel={selectedPresenceLabel}
+                            footerLabel={`应用 ${formatDuration(props.dashboard?.summary.focusSeconds ?? 0)}`}
+                            selectedKey={selectedPresenceKey}
+                            onSelectKey={(key) => {
+                                if (key === 'active' || key === 'idle' || key === 'locked') {
+                                    setSelectedPresenceKey(key)
+                                }
+                            }}
+                            height={232}
+                            emptyLabel="所选日期没有状态分布数据"
+                        />
                     </div>
                 </div>
 
                 <div className="presence-legend">
-                    <button
-                        type="button"
-                        className={`presence-legend-item ${selectedPresenceKey === 'active' ? 'is-selected' : ''}`}
-                        onClick={() => setSelectedPresenceKey('active')}
-                    >
-                        <span className="presence-legend-name">
-                            <i style={{ backgroundColor: '#2f6fdb' }} />
-                            活跃
-                        </span>
-                        <strong>{formatDuration(props.activeSeconds)}</strong>
-                    </button>
-                    <button
-                        type="button"
-                        className={`presence-legend-item ${selectedPresenceKey === 'idle' ? 'is-selected' : ''}`}
-                        onClick={() => setSelectedPresenceKey('idle')}
-                    >
-                        <span className="presence-legend-name">
-                            <i style={{ backgroundColor: '#43d6b0' }} />
-                            空闲
-                        </span>
-                        <strong>{formatDuration(props.idleSeconds)}</strong>
-                    </button>
-                    <button
-                        type="button"
-                        className={`presence-legend-item ${selectedPresenceKey === 'locked' ? 'is-selected' : ''}`}
-                        onClick={() => setSelectedPresenceKey('locked')}
-                    >
-                        <span className="presence-legend-name">
-                            <i style={{ backgroundColor: '#8b7dff' }} />
-                            锁定
-                        </span>
-                        <strong>{formatDuration(props.lockedSeconds)}</strong>
-                    </button>
+                    {props.loading ? (
+                        Array.from({ length: 3 }, (_, index) => (
+                            <div key={`presence-skeleton-${index}`} className="presence-legend-item presence-legend-item-skeleton">
+                                <span className="skeleton-block skeleton-inline skeleton-legend-title" />
+                                <span className="skeleton-block skeleton-inline skeleton-legend-value" />
+                            </div>
+                        ))
+                    ) : (
+                        <>
+                            <button
+                                type="button"
+                                className={`presence-legend-item ${selectedPresenceKey === 'active' ? 'is-selected' : ''}`}
+                                onClick={() => setSelectedPresenceKey('active')}
+                            >
+                                <span className="presence-legend-name">
+                                    <i style={{ backgroundColor: '#2f6fdb' }} />
+                                    活跃
+                                </span>
+                                <strong>{formatDuration(props.activeSeconds)}</strong>
+                            </button>
+                            <button
+                                type="button"
+                                className={`presence-legend-item ${selectedPresenceKey === 'idle' ? 'is-selected' : ''}`}
+                                onClick={() => setSelectedPresenceKey('idle')}
+                            >
+                                <span className="presence-legend-name">
+                                    <i style={{ backgroundColor: '#43d6b0' }} />
+                                    空闲
+                                </span>
+                                <strong>{formatDuration(props.idleSeconds)}</strong>
+                            </button>
+                            <button
+                                type="button"
+                                className={`presence-legend-item ${selectedPresenceKey === 'locked' ? 'is-selected' : ''}`}
+                                onClick={() => setSelectedPresenceKey('locked')}
+                            >
+                                <span className="presence-legend-name">
+                                    <i style={{ backgroundColor: '#8b7dff' }} />
+                                    锁定
+                                </span>
+                                <strong>{formatDuration(props.lockedSeconds)}</strong>
+                            </button>
+                        </>
+                    )}
                 </div>
             </div>
 
             <div className="focus-metric-stack">
-                <div className="focus-metric-card">
-                    <span>最长连续</span>
-                    <strong>{formatDuration(props.dashboard.summary.longestFocusSeconds)}</strong>
-                </div>
-                <div className="focus-metric-card">
-                    <span>活跃占比</span>
-                    <strong>{formatPercent(activeRatio)}</strong>
-                </div>
+                {props.loading ? (
+                    <>
+                        <div className="focus-metric-card focus-metric-card-skeleton">
+                            <span className="skeleton-block skeleton-inline skeleton-metric-label" />
+                            <strong className="skeleton-metric-value">
+                                <span className="skeleton-block skeleton-inline skeleton-metric-value-block" />
+                            </strong>
+                        </div>
+                        <div className="focus-metric-card focus-metric-card-skeleton">
+                            <span className="skeleton-block skeleton-inline skeleton-metric-label" />
+                            <strong className="skeleton-metric-value">
+                                <span className="skeleton-block skeleton-inline skeleton-metric-value-block" />
+                            </strong>
+                        </div>
+                    </>
+                ) : (
+                    <>
+                        <div className="focus-metric-card">
+                            <span>最长连续</span>
+                            <strong>{formatDuration(props.dashboard?.summary.longestFocusSeconds ?? 0)}</strong>
+                        </div>
+                        <div className="focus-metric-card">
+                            <span>活跃占比</span>
+                            <strong>{formatPercent(activeRatio)}</strong>
+                        </div>
+                    </>
+                )}
             </div>
         </article>
     )
@@ -405,6 +471,7 @@ function formatWeeklyAxisTick(seconds: number) {
     return `${Math.round(seconds / 3600)} 小时`
 }
 
-function RefreshBadge(_props: { active: boolean }) {
+function RefreshBadge(props: { active: boolean }) {
+    void props
     return null
 }

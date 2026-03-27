@@ -49,6 +49,7 @@ const DAY_SECONDS = 24 * 60 * 60
 const SNAP_SECONDS = 5 * 60
 
 export function TimelineChart(props: {
+  loading?: boolean
   rows: TimelineRow[]
   viewStartSec: number
   viewEndSec: number
@@ -159,6 +160,57 @@ export function TimelineChart(props: {
       window.removeEventListener('pointercancel', handlePointerUp)
     }
   }, [maxZoomSec, minZoomSec, props, visibleDuration])
+
+  if (props.loading) {
+    return (
+      <section className="timeline-devtools timeline-devtools-skeleton" aria-hidden="true">
+        <div className="timeline-devtools-head">
+          <div className="timeline-devtools-summary">
+            <span className="skeleton-block skeleton-inline skeleton-timeline-window" />
+          </div>
+
+          <div className="timeline-devtools-meta">
+            <span className="skeleton-block skeleton-inline skeleton-timeline-pill" />
+            <span className="skeleton-block skeleton-inline skeleton-timeline-pill" />
+          </div>
+        </div>
+
+        <div className="timeline-waterfall timeline-waterfall-skeleton">
+          <div className="timeline-axis timeline-axis-skeleton">
+            <div className="timeline-axis-label">
+              <span className="skeleton-block skeleton-inline skeleton-axis-title" />
+            </div>
+            <div className="timeline-axis-track timeline-axis-track-skeleton">
+              {Array.from({ length: 6 }, (_, index) => (
+                <span
+                  key={`timeline-tick-${index}`}
+                  className="skeleton-block skeleton-inline skeleton-timeline-tick"
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="timeline-lane-stack timeline-lane-stack-skeleton">
+            {Array.from({ length: 2 }, (_, rowIndex) => (
+              <div key={`timeline-row-${rowIndex}`} className="timeline-row timeline-row-skeleton">
+                <div className="timeline-row-head">
+                  <span className="skeleton-block skeleton-inline skeleton-timeline-row-label" />
+                </div>
+                <div className="timeline-row-track timeline-row-track-skeleton">
+                  {Array.from({ length: 5 }, (_, segmentIndex) => (
+                    <span
+                      key={`timeline-segment-${rowIndex}-${segmentIndex}`}
+                      className={`skeleton-block timeline-segment-skeleton timeline-segment-skeleton-${segmentIndex}`}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+    )
+  }
 
   if (layout.length === 0) {
     return <div className="empty-card">没有可展示的时间线数据</div>

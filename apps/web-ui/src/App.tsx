@@ -1,6 +1,6 @@
 /* ActivityWatch-inspired multi-page dashboard for stats, timeline, and settings. */
 
-import { Suspense, lazy, memo, startTransition, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, startTransition, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import {
   API_BASE_URL,
@@ -24,7 +24,9 @@ import {
   type DashboardFilter,
   type DashboardModel,
 } from './lib/chart-model'
-import type { WeekBarDatum } from './pages/stats-page'
+import { TimelineClock } from './components/timeline-clock'
+import { TimelineChart } from './components/timeline-chart'
+import { StatsPage, type WeekBarDatum } from './pages/stats-page'
 
 const MAX_ZOOM_HOURS = 8
 const MIN_ZOOM_HOURS = 1 / 12
@@ -35,21 +37,6 @@ const PAGE_ITEMS = [
 ] as const
 
 type AppPage = (typeof PAGE_ITEMS)[number]['id']
-
-const StatsPageRoute = lazy(async () => {
-  const module = await import('./pages/stats-page')
-  return { default: module.StatsPage }
-})
-
-const TimelineClock = lazy(async () => {
-  const module = await import('./components/timeline-clock')
-  return { default: module.TimelineClock }
-})
-
-const TimelineChart = lazy(async () => {
-  const module = await import('./components/timeline-chart')
-  return { default: module.TimelineChart }
-})
 
 function App() {
   const [page, setPage] = useHashPage()
@@ -267,7 +254,7 @@ function App() {
     [monthCalendar?.days, resolvedSelectedDate],
   )
   const hasDashboard = dashboard !== null
-  const showInitialLoading = !hasDashboard && isBootstrapping
+  const shouldRenderPage = hasDashboard || (isBootstrapping && !error)
 
   function applySelectedDate(nextDate: string) {
     const nextWindow = defaultTimelineViewport(nextDate, agentToday, agentTimezone)
@@ -345,39 +332,38 @@ function App() {
           </div>
         </header>
 
-        {showInitialLoading ? <LoadingState /> : null}
-        {error && !hasDashboard ? <ErrorState error={error} /> : null}
+        {error && !hasDashboard && !shouldRenderPage ? <ErrorState error={error} /> : null}
         {error && hasDashboard ? <InlineErrorState error={error} /> : null}
 
-        {dashboard ? (
+        {shouldRenderPage ? (
           <>
             {page === 'stats' ? (
-              <Suspense fallback={<div className="state-card">统计页加载中…</div>}>
-                <StatsPageRoute
-                  dashboard={dashboard}
-                  appFilter={appFilter}
-                  domainFilter={domainFilter}
-                  setAppFilter={setAppFilter}
-                  setDomainFilter={setDomainFilter}
-                  periodSummary={periodSummary}
-                  calendarDays={monthCalendar?.days ?? []}
-                  calendarMonth={calendarMonth ?? monthFromDate(resolvedSelectedDate)}
-                  selectedDate={resolvedSelectedDate}
-                  agentToday={agentToday}
-                  calendarError={calendarError}
-                  weekBars={weekBars}
-                  isTimelineRefreshing={isTimelineRefreshing}
-                  isPeriodRefreshing={isPeriodRefreshing}
-                  isCalendarRefreshing={isCalendarRefreshing}
-                  onCalendarMonthChange={handleCalendarMonthChange}
-                  onSelectDate={applySelectedDate}
-                />
-              </Suspense>
+              <StatsPage
+                dashboard={dashboard}
+                loading={!hasDashboard}
+                appFilter={appFilter}
+                domainFilter={domainFilter}
+                setAppFilter={setAppFilter}
+                setDomainFilter={setDomainFilter}
+                periodSummary={periodSummary}
+                calendarDays={monthCalendar?.days ?? []}
+                calendarMonth={calendarMonth ?? monthFromDate(resolvedSelectedDate)}
+                selectedDate={resolvedSelectedDate}
+                agentToday={agentToday}
+                calendarError={calendarError}
+                weekBars={weekBars}
+                isTimelineRefreshing={isTimelineRefreshing}
+                isPeriodRefreshing={isPeriodRefreshing}
+                isCalendarRefreshing={isCalendarRefreshing}
+                onCalendarMonthChange={handleCalendarMonthChange}
+                onSelectDate={applySelectedDate}
+              />
             ) : null}
 
             {page === 'timeline' ? (
               <TimelinePage
                 dashboard={dashboard}
+                loading={!hasDashboard}
                 appFilter={appFilter}
                 selectedDate={resolvedSelectedDate}
                 viewStartHour={viewStartHour}
@@ -392,6 +378,7 @@ function App() {
             {page === 'settings' ? (
               <SettingsPage
                 agentSettings={agentSettings}
+                loading={!hasDashboard}
                 error={error}
                 settingsError={settingsError}
                 settingsNotice={settingsNotice}
@@ -471,7 +458,8 @@ function App() {
 }
 
 function TimelinePage(props: {
-  dashboard: DashboardModel
+  dashboard: DashboardModel | null
+  loading: boolean
   appFilter: DashboardFilter
   selectedDate: string
   viewStartHour: number
@@ -485,33 +473,33 @@ function TimelinePage(props: {
   const visibleFocusItems = useMemo(
     () =>
       buildVisibleFocusItems(
-        props.dashboard.focusSegments,
+        props.dashboard?.focusSegments ?? [],
         props.viewStartSec,
         props.viewEndSec,
       ),
-    [props.dashboard.focusSegments, props.viewEndSec, props.viewStartSec],
+    [props.dashboard?.focusSegments, props.viewEndSec, props.viewStartSec],
   )
   const browserDomainBySegmentId = useMemo(
-    () => buildPrimaryBrowserDomainMap(visibleFocusItems, props.dashboard.browserSegments),
-    [props.dashboard.browserSegments, visibleFocusItems],
+    () => buildPrimaryBrowserDomainMap(visibleFocusItems, props.dashboard?.browserSegments ?? []),
+    [props.dashboard?.browserSegments, visibleFocusItems],
   )
   const timelineRows = useMemo(
     () => [
       {
         id: 'focus',
         label: '应用',
-        segments: props.dashboard.focusSegments,
+        segments: props.dashboard?.focusSegments ?? [],
         selectedKey: props.appFilter?.key ?? null,
         splitByKey: false,
       },
       {
         id: 'presence',
         label: '状态',
-        segments: props.dashboard.presenceSegments,
+        segments: props.dashboard?.presenceSegments ?? [],
         includeInTable: false,
       },
     ],
-    [props.appFilter, props.dashboard.focusSegments, props.dashboard.presenceSegments],
+    [props.appFilter, props.dashboard?.focusSegments, props.dashboard?.presenceSegments],
   )
   const windowDurationSec = props.viewEndSec - props.viewStartSec
   const visibleAppCount = useMemo(
@@ -519,17 +507,18 @@ function TimelinePage(props: {
     [visibleFocusItems],
   )
   const focusDurationSec = useMemo(
-    () => sumOverlappedDuration(props.dashboard.focusSegments, props.viewStartSec, props.viewEndSec),
-    [props.dashboard.focusSegments, props.viewEndSec, props.viewStartSec],
+    () =>
+      sumOverlappedDuration(props.dashboard?.focusSegments ?? [], props.viewStartSec, props.viewEndSec),
+    [props.dashboard?.focusSegments, props.viewEndSec, props.viewStartSec],
   )
   const activeDurationSec = useMemo(
     () =>
       sumOverlappedDuration(
-        props.dashboard.presenceSegments.filter((segment) => segment.key === 'active'),
+        (props.dashboard?.presenceSegments ?? []).filter((segment) => segment.key === 'active'),
         props.viewStartSec,
         props.viewEndSec,
       ),
-    [props.dashboard.presenceSegments, props.viewEndSec, props.viewStartSec],
+    [props.dashboard?.presenceSegments, props.viewEndSec, props.viewStartSec],
   )
   const longestVisibleDurationSec = useMemo(
     () =>
@@ -560,41 +549,21 @@ function TimelinePage(props: {
             </div>
 
             <div className="timeline-primary-chart">
-              <Suspense fallback={<div className="state-card">时间线加载中…</div>}>
-                <TimelineChart
-                  rows={timelineRows}
-                  viewStartSec={props.viewStartSec}
-                  viewEndSec={props.viewEndSec}
-                  baseDate={props.selectedDate}
-                  windowLabel={windowLabel}
-                  windowDurationLabel={`窗口 ${formatDuration(windowDurationSec)}`}
-                  windowItemCount={visibleFocusItems.length}
-                  highlightedSegmentId={hoveredFocusSegmentId}
-                  interactiveZoom={false}
-                  minViewHours={MIN_ZOOM_HOURS}
-                  maxViewHours={MAX_ZOOM_HOURS}
-                  onSegmentHover={setHoveredFocusSegmentId}
-                  onViewportChange={(nextStartSec, nextEndSec) => {
-                    const nextZoom = clampZoomHours(
-                      normalizeZoomHours((nextEndSec - nextStartSec) / 3600),
-                    )
-                    const nextStartHour = normalizeZoomHours(nextStartSec / 3600)
-                    props.setZoomHours(nextZoom)
-                    props.setViewStartHour(clampViewStart(nextStartHour, nextZoom))
-                  }}
-                />
-              </Suspense>
-            </div>
-
-            <Suspense fallback={<div className="state-card">时间环加载中…</div>}>
-              <TimelineClock
-                focusSegments={props.dashboard.focusSegments}
-                presenceSegments={props.dashboard.presenceSegments}
+              <TimelineChart
+                loading={props.loading}
+                rows={timelineRows}
                 viewStartSec={props.viewStartSec}
                 viewEndSec={props.viewEndSec}
-                minViewSec={MIN_ZOOM_HOURS * 3600}
-                maxViewSec={MAX_ZOOM_HOURS * 3600}
-                onWindowChange={(nextStartSec, nextEndSec) => {
+                baseDate={props.selectedDate}
+                windowLabel={windowLabel}
+                windowDurationLabel={`窗口 ${formatDuration(windowDurationSec)}`}
+                windowItemCount={visibleFocusItems.length}
+                highlightedSegmentId={hoveredFocusSegmentId}
+                interactiveZoom={false}
+                minViewHours={MIN_ZOOM_HOURS}
+                maxViewHours={MAX_ZOOM_HOURS}
+                onSegmentHover={setHoveredFocusSegmentId}
+                onViewportChange={(nextStartSec, nextEndSec) => {
                   const nextZoom = clampZoomHours(
                     normalizeZoomHours((nextEndSec - nextStartSec) / 3600),
                   )
@@ -603,28 +572,98 @@ function TimelinePage(props: {
                   props.setViewStartHour(clampViewStart(nextStartHour, nextZoom))
                 }}
               />
-            </Suspense>
+            </div>
+
+            <TimelineClock
+              loading={props.loading}
+              focusSegments={props.dashboard?.focusSegments ?? []}
+              presenceSegments={props.dashboard?.presenceSegments ?? []}
+              viewStartSec={props.viewStartSec}
+              viewEndSec={props.viewEndSec}
+              minViewSec={MIN_ZOOM_HOURS * 3600}
+              maxViewSec={MAX_ZOOM_HOURS * 3600}
+              onWindowChange={(nextStartSec, nextEndSec) => {
+                const nextZoom = clampZoomHours(
+                  normalizeZoomHours((nextEndSec - nextStartSec) / 3600),
+                )
+                const nextStartHour = normalizeZoomHours(nextStartSec / 3600)
+                props.setZoomHours(nextZoom)
+                props.setViewStartHour(clampViewStart(nextStartHour, nextZoom))
+              }}
+            />
 
             <div className="timeline-snapshot-grid" role="list" aria-label="窗口摘要">
               <article className="timeline-snapshot-card" role="listitem">
                 <span>窗口时长</span>
-                <strong>{formatDuration(windowDurationSec)}</strong>
-                <small>{windowLabel}</small>
+                {props.loading ? (
+                  <>
+                    <strong className="timeline-snapshot-value-skeleton">
+                      <span className="skeleton-block skeleton-inline skeleton-snapshot-value" />
+                    </strong>
+                    <small>
+                      <span className="skeleton-block skeleton-inline skeleton-snapshot-copy" />
+                    </small>
+                  </>
+                ) : (
+                  <>
+                    <strong>{formatDuration(windowDurationSec)}</strong>
+                    <small>{windowLabel}</small>
+                  </>
+                )}
               </article>
               <article className="timeline-snapshot-card" role="listitem">
                 <span>窗口覆盖</span>
-                <strong>{formatPercent(focusCoverageRatio)}</strong>
-                <small>应用记录 {formatDuration(focusDurationSec)}</small>
+                {props.loading ? (
+                  <>
+                    <strong className="timeline-snapshot-value-skeleton">
+                      <span className="skeleton-block skeleton-inline skeleton-snapshot-value" />
+                    </strong>
+                    <small>
+                      <span className="skeleton-block skeleton-inline skeleton-snapshot-copy" />
+                    </small>
+                  </>
+                ) : (
+                  <>
+                    <strong>{formatPercent(focusCoverageRatio)}</strong>
+                    <small>应用记录 {formatDuration(focusDurationSec)}</small>
+                  </>
+                )}
               </article>
               <article className="timeline-snapshot-card" role="listitem">
                 <span>活跃占比</span>
-                <strong>{formatPercent(activeRatio)}</strong>
-                <small>状态活跃 {formatDuration(activeDurationSec)}</small>
+                {props.loading ? (
+                  <>
+                    <strong className="timeline-snapshot-value-skeleton">
+                      <span className="skeleton-block skeleton-inline skeleton-snapshot-value" />
+                    </strong>
+                    <small>
+                      <span className="skeleton-block skeleton-inline skeleton-snapshot-copy" />
+                    </small>
+                  </>
+                ) : (
+                  <>
+                    <strong>{formatPercent(activeRatio)}</strong>
+                    <small>状态活跃 {formatDuration(activeDurationSec)}</small>
+                  </>
+                )}
               </article>
               <article className="timeline-snapshot-card" role="listitem">
                 <span>应用与连续</span>
-                <strong>{visibleAppCount} / {formatDuration(longestVisibleDurationSec)}</strong>
-                <small>窗口内应用数 / 最长片段</small>
+                {props.loading ? (
+                  <>
+                    <strong className="timeline-snapshot-value-skeleton">
+                      <span className="skeleton-block skeleton-inline skeleton-snapshot-value" />
+                    </strong>
+                    <small>
+                      <span className="skeleton-block skeleton-inline skeleton-snapshot-copy" />
+                    </small>
+                  </>
+                ) : (
+                  <>
+                    <strong>{visibleAppCount} / {formatDuration(longestVisibleDurationSec)}</strong>
+                    <small>窗口内应用数 / 最长片段</small>
+                  </>
+                )}
               </article>
             </div>
 
@@ -638,22 +677,38 @@ function TimelinePage(props: {
                 <h2>事件列表</h2>
               </div>
               <div className="timeline-header-meta">
-                <span className="timeline-meta-pill">窗口内 {visibleFocusItems.length}</span>
+                {props.loading ? (
+                  <span className="timeline-meta-pill timeline-meta-pill-skeleton">
+                    <span className="skeleton-block skeleton-inline skeleton-meta-pill" />
+                  </span>
+                ) : (
+                  <span className="timeline-meta-pill">窗口内 {visibleFocusItems.length}</span>
+                )}
               </div>
             </div>
 
             <div className="detail-list-section">
               <div className="detail-list-meta">
                 <span>当前窗口</span>
-                <strong>{visibleFocusItems.length}</strong>
+                {props.loading ? (
+                  <strong>
+                    <span className="skeleton-block skeleton-inline skeleton-detail-count" />
+                  </strong>
+                ) : (
+                  <strong>{visibleFocusItems.length}</strong>
+                )}
               </div>
               <div className="detail-segment-scroll">
-                <FocusSegmentList
-                  segments={visibleFocusItems}
-                  browserDomainBySegmentId={browserDomainBySegmentId}
-                  hoveredSegmentId={hoveredFocusSegmentId}
-                  onHoverSegment={setHoveredFocusSegmentId}
-                />
+                {props.loading ? (
+                  <DetailListSkeleton />
+                ) : (
+                  <FocusSegmentList
+                    segments={visibleFocusItems}
+                    browserDomainBySegmentId={browserDomainBySegmentId}
+                    hoveredSegmentId={hoveredFocusSegmentId}
+                    onHoverSegment={setHoveredFocusSegmentId}
+                  />
+                )}
               </div>
             </div>
           </div>
@@ -665,6 +720,7 @@ function TimelinePage(props: {
 
 function SettingsPage(props: {
   agentSettings: AgentSettingsResponse | null
+  loading: boolean
   error: string | null
   settingsError: string | null
   settingsNotice: string | null
@@ -696,6 +752,8 @@ function SettingsPage(props: {
       return
     }
 
+    // Keep the editable local form in sync when async settings arrive from the agent.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setIdleThresholdSecs(
       Number.isFinite(props.agentSettings.idle_threshold_secs)
         ? props.agentSettings.idle_threshold_secs
@@ -744,26 +802,30 @@ function SettingsPage(props: {
               <RefreshBadge active={props.isSettingsRefreshing} />
             </div>
             <dl className="settings-list">
-              <div>
-                <dt>接口地址</dt>
-                <dd>{API_BASE_URL}</dd>
-              </div>
-              <div>
-                <dt>前端地址</dt>
-                <dd>{props.agentSettings?.web_ui_url ?? '--'}</dd>
-              </div>
-              <div>
-                <dt>连接状态</dt>
-                <dd>{props.error ? '离线' : '在线'}</dd>
-              </div>
-              <div>
-                <dt>最后更新</dt>
-                <dd>{props.lastUpdatedAt ?? '等待连接'}</dd>
-              </div>
-              <div>
-                <dt>启动命令</dt>
-                <dd>{props.agentSettings?.launch_command ?? '--'}</dd>
-              </div>
+              {props.loading ? <SettingsListSkeleton rows={5} /> : (
+                <>
+                  <div>
+                    <dt>接口地址</dt>
+                    <dd>{API_BASE_URL}</dd>
+                  </div>
+                  <div>
+                    <dt>前端地址</dt>
+                    <dd>{props.agentSettings?.web_ui_url ?? '--'}</dd>
+                  </div>
+                  <div>
+                    <dt>连接状态</dt>
+                    <dd>{props.error ? '离线' : '在线'}</dd>
+                  </div>
+                  <div>
+                    <dt>最后更新</dt>
+                    <dd>{props.lastUpdatedAt ?? '等待连接'}</dd>
+                  </div>
+                  <div>
+                    <dt>启动命令</dt>
+                    <dd>{props.agentSettings?.launch_command ?? '--'}</dd>
+                  </div>
+                </>
+              )}
             </dl>
           </div>
 
@@ -771,142 +833,150 @@ function SettingsPage(props: {
             <p className="section-kicker">启动</p>
             <h2>启动与采集配置</h2>
             <dl className="settings-list">
-              <div>
-                <dt>开机自启动</dt>
-                <dd>
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={props.agentSettings?.autostart_enabled ?? false}
-                    aria-label="开机自启动"
-                    className={`toggle-switch ${props.agentSettings?.autostart_enabled ? 'is-active' : ''}`}
-                    disabled={props.savingAutostart}
-                    onClick={() => {
-                      void props.onToggleAutostart(!(props.agentSettings?.autostart_enabled ?? false))
-                    }}
-                  >
-                    <span className="toggle-switch-track" aria-hidden="true">
-                      <span className="toggle-switch-thumb" />
-                    </span>
-                    <span className="toggle-switch-text">
-                      {props.savingAutostart
-                        ? '保存中…'
-                        : props.agentSettings?.autostart_enabled
-                          ? '已启用'
-                          : '已禁用'}
-                    </span>
-                  </button>
-                </dd>
-              </div>
-              <div>
-                <dt>托盘菜单</dt>
-                <dd>{props.agentSettings?.tray_enabled ? '已启用' : '已禁用'}</dd>
-              </div>
-              <div>
-                <dt>日期</dt>
-                <dd>{props.selectedDate}</dd>
-              </div>
-              <div>
-                <dt>时区</dt>
-                <dd>{props.timezone}</dd>
-              </div>
+              {props.loading ? <SettingsListSkeleton rows={4} /> : (
+                <>
+                  <div>
+                    <dt>开机自启动</dt>
+                    <dd>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={props.agentSettings?.autostart_enabled ?? false}
+                        aria-label="开机自启动"
+                        className={`toggle-switch ${props.agentSettings?.autostart_enabled ? 'is-active' : ''}`}
+                        disabled={props.savingAutostart}
+                        onClick={() => {
+                          void props.onToggleAutostart(!(props.agentSettings?.autostart_enabled ?? false))
+                        }}
+                      >
+                        <span className="toggle-switch-track" aria-hidden="true">
+                          <span className="toggle-switch-thumb" />
+                        </span>
+                        <span className="toggle-switch-text">
+                          {props.savingAutostart
+                            ? '保存中…'
+                            : props.agentSettings?.autostart_enabled
+                              ? '已启用'
+                              : '已禁用'}
+                        </span>
+                      </button>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>托盘菜单</dt>
+                    <dd>{props.agentSettings?.tray_enabled ? '已启用' : '已禁用'}</dd>
+                  </div>
+                  <div>
+                    <dt>日期</dt>
+                    <dd>{props.selectedDate}</dd>
+                  </div>
+                  <div>
+                    <dt>时区</dt>
+                    <dd>{props.timezone}</dd>
+                  </div>
+                </>
+              )}
             </dl>
 
-            <div className="settings-config-grid" role="group" aria-label="采集阈值和过滤设置">
-              <label className="settings-config-field">
-                <span>空闲阈值（秒）</span>
-                <input
-                  type="number"
-                  min={15}
-                  max={1800}
-                  step={5}
-                  value={idleThresholdSecs}
-                  onChange={(event) => setIdleThresholdSecs(Number(event.target.value) || 0)}
-                />
-                <small className="settings-config-help">
-                  超过该时长无键盘/鼠标输入将判定为 Idle，建议 60~120 秒。
-                </small>
-              </label>
+            {props.loading ? (
+              <SettingsConfigSkeleton />
+            ) : (
+              <div className="settings-config-grid" role="group" aria-label="采集阈值和过滤设置">
+                <label className="settings-config-field">
+                  <span>空闲阈值（秒）</span>
+                  <input
+                    type="number"
+                    min={15}
+                    max={1800}
+                    step={5}
+                    value={idleThresholdSecs}
+                    onChange={(event) => setIdleThresholdSecs(Number(event.target.value) || 0)}
+                  />
+                  <small className="settings-config-help">
+                    超过该时长无键盘/鼠标输入将判定为 Idle，建议 60~120 秒。
+                  </small>
+                </label>
 
-              <label className="settings-config-field">
-                <span>轮询间隔（毫秒）</span>
-                <input
-                  type="number"
-                  min={250}
-                  max={5000}
-                  step={50}
-                  value={pollIntervalMillis}
-                  onChange={(event) => setPollIntervalMillis(Number(event.target.value) || 0)}
-                />
-                <small className="settings-config-help">
-                  越小越实时但资源占用更高；建议保持 500~1500 毫秒。
-                </small>
-              </label>
+                <label className="settings-config-field">
+                  <span>轮询间隔（毫秒）</span>
+                  <input
+                    type="number"
+                    min={250}
+                    max={5000}
+                    step={50}
+                    value={pollIntervalMillis}
+                    onChange={(event) => setPollIntervalMillis(Number(event.target.value) || 0)}
+                  />
+                  <small className="settings-config-help">
+                    越小越实时但资源占用更高；建议保持 500~1500 毫秒。
+                  </small>
+                </label>
 
-              <label className="settings-config-check">
-                <input
-                  type="checkbox"
-                  checked={recordWindowTitles}
-                  onChange={(event) => setRecordWindowTitles(event.target.checked)}
-                />
-                <span>
-                  记录窗口标题
-                  <small>用于更细粒度窗口识别，关闭可减少隐私暴露。</small>
-                </span>
-              </label>
+                <label className="settings-config-check">
+                  <input
+                    type="checkbox"
+                    checked={recordWindowTitles}
+                    onChange={(event) => setRecordWindowTitles(event.target.checked)}
+                  />
+                  <span>
+                    记录窗口标题
+                    <small>用于更细粒度窗口识别，关闭可减少隐私暴露。</small>
+                  </span>
+                </label>
 
-              <label className="settings-config-check">
-                <input
-                  type="checkbox"
-                  checked={recordPageTitles}
-                  onChange={(event) => setRecordPageTitles(event.target.checked)}
-                />
-                <span>
-                  记录页面标题
-                  <small>浏览器页面将保留标题，关闭后仅记录域名。</small>
-                </span>
-              </label>
+                <label className="settings-config-check">
+                  <input
+                    type="checkbox"
+                    checked={recordPageTitles}
+                    onChange={(event) => setRecordPageTitles(event.target.checked)}
+                  />
+                  <span>
+                    记录页面标题
+                    <small>浏览器页面将保留标题，关闭后仅记录域名。</small>
+                  </span>
+                </label>
 
-              <label className="settings-config-field is-wide">
-                <span>忽略应用（每行一个，如 chrome.exe）</span>
-                <textarea
-                  rows={4}
-                  value={ignoredAppsText}
-                  onChange={(event) => setIgnoredAppsText(event.target.value)}
-                />
-                <small className="settings-config-help">
-                  命中列表的应用将不写入焦点记录，支持换行或逗号分隔。
-                </small>
-              </label>
+                <label className="settings-config-field is-wide">
+                  <span>忽略应用（每行一个，如 chrome.exe）</span>
+                  <textarea
+                    rows={4}
+                    value={ignoredAppsText}
+                    onChange={(event) => setIgnoredAppsText(event.target.value)}
+                  />
+                  <small className="settings-config-help">
+                    命中列表的应用将不写入焦点记录，支持换行或逗号分隔。
+                  </small>
+                </label>
 
-              <label className="settings-config-field is-wide">
-                <span>忽略域名（每行一个，如 example.com）</span>
-                <textarea
-                  rows={4}
-                  value={ignoredDomainsText}
-                  onChange={(event) => setIgnoredDomainsText(event.target.value)}
-                />
-                <small className="settings-config-help">
-                  命中列表的域名不会进入浏览器记录，适合排除隐私或噪声站点。
-                </small>
-              </label>
+                <label className="settings-config-field is-wide">
+                  <span>忽略域名（每行一个，如 example.com）</span>
+                  <textarea
+                    rows={4}
+                    value={ignoredDomainsText}
+                    onChange={(event) => setIgnoredDomainsText(event.target.value)}
+                  />
+                  <small className="settings-config-help">
+                    命中列表的域名不会进入浏览器记录，适合排除隐私或噪声站点。
+                  </small>
+                </label>
 
-              <div className="settings-config-actions">
-                <button
-                  type="button"
-                  className="settings-save-button"
-                  disabled={props.savingConfig}
-                  onClick={() => {
-                    void handleSaveConfig()
-                  }}
-                >
-                  {props.savingConfig ? '保存中…' : '保存采集配置'}
-                </button>
+                <div className="settings-config-actions">
+                  <button
+                    type="button"
+                    className="settings-save-button"
+                    disabled={props.savingConfig}
+                    onClick={() => {
+                      void handleSaveConfig()
+                    }}
+                  >
+                    {props.savingConfig ? '保存中…' : '保存采集配置'}
+                  </button>
+                </div>
               </div>
-            </div>
+            )}
 
-            {props.settingsError ? <div className="settings-error">{props.settingsError}</div> : null}
-            {props.settingsNotice ? <div className="settings-notice">{props.settingsNotice}</div> : null}
+            {!props.loading && props.settingsError ? <div className="settings-error">{props.settingsError}</div> : null}
+            {!props.loading && props.settingsNotice ? <div className="settings-notice">{props.settingsNotice}</div> : null}
           </div>
         </div>
 
@@ -915,18 +985,22 @@ function SettingsPage(props: {
             <p className="section-kicker">监视器</p>
             <h2>监视器状态</h2>
             <div className="monitor-list">
-              {props.agentSettings?.monitors.map((monitor) => (
-                <article key={monitor.key} className="monitor-card">
-                  <div className="monitor-head">
-                    <strong>{monitor.label}</strong>
-                    <span className={`monitor-badge is-${monitor.status}`}>{monitor.status}</span>
-                  </div>
-                  <p>{monitor.detail}</p>
-                  <small>
-                    {monitor.last_seen ? `最后活跃 ${new Date(monitor.last_seen).toLocaleTimeString()}` : '等待首次心跳'}
-                  </small>
-                </article>
-              )) ?? <div className="empty-card">读取中…</div>}
+              {props.loading ? (
+                <MonitorListSkeleton />
+              ) : (
+                props.agentSettings?.monitors.map((monitor) => (
+                  <article key={monitor.key} className="monitor-card">
+                    <div className="monitor-head">
+                      <strong>{monitor.label}</strong>
+                      <span className={`monitor-badge is-${monitor.status}`}>{monitor.status}</span>
+                    </div>
+                    <p>{monitor.detail}</p>
+                    <small>
+                      {monitor.last_seen ? `最后活跃 ${new Date(monitor.last_seen).toLocaleTimeString()}` : '等待首次心跳'}
+                    </small>
+                  </article>
+                )) ?? <div className="empty-card">读取中…</div>
+              )}
             </div>
           </div>
         </div>
@@ -977,10 +1051,6 @@ const FocusSegmentList = memo(function FocusSegmentList(props: {
   )
 })
 
-function LoadingState() {
-  return <div className="state-card">加载中…</div>
-}
-
 function ErrorState(props: { error: string }) {
   return <div className="state-card error-card">{props.error}</div>
 }
@@ -992,6 +1062,92 @@ function InlineErrorState(props: { error: string }) {
 function RefreshBadge(props: { active: boolean }) {
   void props
   return null
+}
+
+function DetailListSkeleton() {
+  return (
+    <div className="detail-segment-list detail-segment-list-skeleton" aria-hidden="true">
+      {Array.from({ length: 8 }, (_, index) => (
+        <div key={`detail-skeleton-${index}`} className="detail-segment-item detail-segment-item-skeleton">
+          <span className="detail-segment-row">
+            <span className="skeleton-block skeleton-inline skeleton-detail-title" />
+            <span className="skeleton-block skeleton-inline skeleton-detail-domain" />
+          </span>
+          <span className="skeleton-block skeleton-inline skeleton-detail-time" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function SettingsListSkeleton(props: { rows: number }) {
+  return (
+    <>
+      {Array.from({ length: props.rows }, (_, index) => (
+        <div key={`settings-skeleton-${index}`} className="settings-skeleton-row">
+          <dt>
+            <span className="skeleton-block skeleton-inline skeleton-settings-label" />
+          </dt>
+          <dd>
+            <span className="skeleton-block skeleton-inline skeleton-settings-value" />
+          </dd>
+        </div>
+      ))}
+    </>
+  )
+}
+
+function SettingsConfigSkeleton() {
+  return (
+    <div className="settings-config-grid settings-config-grid-skeleton" aria-hidden="true">
+      {Array.from({ length: 2 }, (_, index) => (
+        <div key={`settings-field-${index}`} className="settings-config-field settings-config-field-skeleton">
+          <span className="skeleton-block skeleton-inline skeleton-field-label" />
+          <span className="skeleton-block skeleton-input" />
+          <span className="skeleton-block skeleton-inline skeleton-field-help" />
+        </div>
+      ))}
+      {Array.from({ length: 2 }, (_, index) => (
+        <div key={`settings-check-${index}`} className="settings-config-check settings-config-check-skeleton">
+          <span className="skeleton-block skeleton-checkbox" />
+          <span className="settings-config-check-copy">
+            <span className="skeleton-block skeleton-inline skeleton-check-title" />
+            <span className="skeleton-block skeleton-inline skeleton-check-help" />
+          </span>
+        </div>
+      ))}
+      {Array.from({ length: 2 }, (_, index) => (
+        <div
+          key={`settings-textarea-${index}`}
+          className="settings-config-field settings-config-field-skeleton is-wide"
+        >
+          <span className="skeleton-block skeleton-inline skeleton-field-label" />
+          <span className="skeleton-block skeleton-textarea" />
+          <span className="skeleton-block skeleton-inline skeleton-field-help" />
+        </div>
+      ))}
+      <div className="settings-config-actions settings-config-actions-skeleton">
+        <span className="skeleton-block skeleton-button" />
+      </div>
+    </div>
+  )
+}
+
+function MonitorListSkeleton() {
+  return (
+    <>
+      {Array.from({ length: 3 }, (_, index) => (
+        <article key={`monitor-skeleton-${index}`} className="monitor-card monitor-card-skeleton">
+          <div className="monitor-head">
+            <span className="skeleton-block skeleton-inline skeleton-monitor-title" />
+            <span className="skeleton-block skeleton-inline skeleton-monitor-badge" />
+          </div>
+          <span className="skeleton-block skeleton-inline skeleton-monitor-line" />
+          <span className="skeleton-block skeleton-inline skeleton-monitor-line skeleton-monitor-line-short" />
+        </article>
+      ))}
+    </>
+  )
 }
 
 function useHashPage(): [AppPage, (page: AppPage) => void] {

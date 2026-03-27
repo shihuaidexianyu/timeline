@@ -15,6 +15,7 @@ const CONTROL_RING_RADIUS = 106
 type DragMode = 'resize' | 'move' | null
 
 export function TimelineClock(props: {
+    loading?: boolean
     focusSegments: ChartSegment[]
     presenceSegments: ChartSegment[]
     viewStartSec: number
@@ -23,6 +24,7 @@ export function TimelineClock(props: {
     maxViewSec: number
     onWindowChange: (startSec: number, endSec: number) => void
 }) {
+    const { loading, minViewSec, maxViewSec, onWindowChange } = props
     const svgRef = useRef<SVGSVGElement | null>(null)
     const dragModeRef = useRef<DragMode>(null)
     const moveCenterOffsetRef = useRef(0)
@@ -46,6 +48,10 @@ export function TimelineClock(props: {
     const moveHandlePoint = pointAtSec((windowCenterSec + DAY_SECONDS / 2) % DAY_SECONDS, CONTROL_RING_RADIUS)
 
     useEffect(() => {
+        if (loading) {
+            return
+        }
+
         function handlePointerMove(event: PointerEvent) {
             const mode = dragModeRef.current
             const svg = svgRef.current
@@ -60,22 +66,22 @@ export function TimelineClock(props: {
                 const centerSec = normalizeSec(nextSec + moveCenterOffsetRef.current)
                 const half = windowDuration / 2
                 const nextStart = clamp(centerSec - half, 0, DAY_SECONDS - windowDuration)
-                props.onWindowChange(nextStart, nextStart + windowDuration)
+                onWindowChange(nextStart, nextStart + windowDuration)
                 return
             }
 
             const resizeCenterSec = resizeCenterSecRef.current
             const halfDuration = Math.abs(nextSec - resizeCenterSec)
             const maxSymmetricDuration = Math.max(
-                props.minViewSec,
+                minViewSec,
                 Math.min(
-                    props.maxViewSec,
+                    maxViewSec,
                     2 * Math.min(resizeCenterSec, DAY_SECONDS - resizeCenterSec),
                 ),
             )
-            const duration = clamp(snapToStep(halfDuration * 2), props.minViewSec, maxSymmetricDuration)
+            const duration = clamp(snapToStep(halfDuration * 2), minViewSec, maxSymmetricDuration)
             const nextStart = resizeCenterSec - duration / 2
-            props.onWindowChange(nextStart, nextStart + duration)
+            onWindowChange(nextStart, nextStart + duration)
         }
 
         function handlePointerUp() {
@@ -95,13 +101,32 @@ export function TimelineClock(props: {
             window.removeEventListener('pointercancel', handlePointerUp)
         }
     }, [
-        props,
-        props.maxViewSec,
-        props.minViewSec,
-        props.onWindowChange,
-        props.viewEndSec,
-        props.viewStartSec,
+        loading,
+        maxViewSec,
+        minViewSec,
+        onWindowChange,
+        windowDuration,
     ])
+
+    if (loading) {
+        return (
+            <div className="timeline-clock-card timeline-clock-card-skeleton" aria-hidden="true">
+                <div className="timeline-clock-shell timeline-clock-shell-skeleton">
+                    <span className="skeleton-block timeline-clock-face-skeleton" />
+                </div>
+                <div className="timeline-clock-footer timeline-clock-footer-skeleton">
+                    <div className="timeline-clock-center timeline-clock-center-skeleton">
+                        <span className="skeleton-block skeleton-inline skeleton-clock-title" />
+                        <span className="skeleton-block skeleton-inline skeleton-clock-subtitle" />
+                    </div>
+                    <div className="timeline-clock-instruction timeline-clock-instruction-skeleton">
+                        <span className="skeleton-block skeleton-inline skeleton-clock-copy" />
+                        <span className="skeleton-block skeleton-inline skeleton-clock-copy skeleton-clock-copy-short" />
+                    </div>
+                </div>
+            </div>
+        )
+    }
 
     function beginResizeDrag(event: ReactPointerEvent<SVGCircleElement>) {
         event.preventDefault()

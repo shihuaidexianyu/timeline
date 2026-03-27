@@ -14,6 +14,7 @@ const HEAT_CLASSES = [
 ] as const
 
 export function CalendarGrid(props: {
+  loading?: boolean
   month: string
   days: DaySummary[]
   selectedDate: string
@@ -27,6 +28,49 @@ export function CalendarGrid(props: {
     [props.days, props.selectedDate],
   )
   const monthSummary = useMemo(() => buildMonthSummary(props.days), [props.days])
+
+  if (props.loading) {
+    return (
+      <div className="calendar-panel calendar-panel-compact calendar-panel-skeleton" aria-hidden="true">
+        <div className="calendar-header">
+          <span className="skeleton-block calendar-nav-button calendar-nav-button-skeleton" />
+          <div className="calendar-header-copy calendar-header-copy-skeleton">
+            <span className="skeleton-block skeleton-inline skeleton-calendar-title" />
+            <span className="skeleton-block skeleton-inline skeleton-calendar-subtitle" />
+          </div>
+          <span className="skeleton-block calendar-nav-button calendar-nav-button-skeleton" />
+        </div>
+
+        <div className="calendar-grid calendar-grid-compact">
+          {Array.from({ length: 7 }, (_, index) => (
+            <span key={`weekday-skeleton-${index}`} className="skeleton-block skeleton-inline skeleton-calendar-weekday" />
+          ))}
+
+          {Array.from({ length: 35 }, (_, index) => (
+            <span
+              key={`calendar-cell-skeleton-${index}`}
+              className="calendar-cell calendar-cell-compact calendar-cell-skeleton"
+            />
+          ))}
+        </div>
+
+        <div className="calendar-legend calendar-legend-skeleton">
+          <span className="skeleton-block skeleton-inline skeleton-calendar-legend-label" />
+          <div className="calendar-legend-swatches" aria-hidden="true">
+            {HEAT_CLASSES.map((heatClass) => (
+              <i key={`legend-${heatClass}`} className={`calendar-legend-swatch ${heatClass} calendar-legend-swatch-skeleton`} />
+            ))}
+          </div>
+          <span className="skeleton-block skeleton-inline skeleton-calendar-legend-label" />
+        </div>
+
+        <div className="calendar-selection-summary calendar-selection-summary-skeleton">
+          <span className="skeleton-block skeleton-inline skeleton-calendar-selection-title" />
+          <span className="skeleton-block skeleton-inline skeleton-calendar-selection-copy" />
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="calendar-panel calendar-panel-compact">

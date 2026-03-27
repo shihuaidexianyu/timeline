@@ -30,6 +30,7 @@ const MONO_FAMILY = '"JetBrains Mono", "Cascadia Mono", "Consolas", "SFMono-Regu
 const PIE_CENTER_X = '50%'
 
 export function DonutChart(props: {
+  loading?: boolean
   title: string
   totalLabel: string
   slices: DonutSlice[]
@@ -147,6 +148,28 @@ export function DonutChart(props: {
     props.totalLabel,
   ])
 
+  if (props.loading) {
+    return (
+      <div className="donut-card donut-card-skeleton" aria-hidden="true">
+        <div className="donut-visual-skeleton">
+          <span className="skeleton-block donut-ring-skeleton" />
+          <span className="skeleton-block skeleton-inline donut-total-skeleton" />
+          <span className="skeleton-block skeleton-inline donut-caption-skeleton" />
+        </div>
+
+        <div className="ranking-list ranking-list-skeleton">
+          {Array.from({ length: 5 }, (_, index) => (
+            <div key={`donut-row-${index}`} className="ranking-row ranking-row-skeleton">
+              <span className="skeleton-block skeleton-inline skeleton-ranking-name" />
+              <span className="skeleton-block skeleton-inline skeleton-ranking-value" />
+              <span className="skeleton-block skeleton-inline skeleton-ranking-percent" />
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
   if (displaySlices.length === 0) {
     return <div className="empty-card">没有可展示的数据</div>
   }
@@ -199,6 +222,7 @@ export function DonutChart(props: {
 }
 
 export function CompactDonutChart(props: {
+  loading?: boolean
   slices: DonutSlice[]
   totalLabel: string
   secondaryLabel: string
@@ -343,6 +367,21 @@ export function CompactDonutChart(props: {
     props.selectedKey,
     props.totalLabel,
   ])
+
+  if (props.loading) {
+    return (
+      <div
+        className="compact-donut-empty compact-donut-skeleton"
+        aria-hidden="true"
+        style={{ height: props.height ?? 232 }}
+      >
+        <span className="skeleton-block donut-ring-skeleton donut-ring-skeleton-compact" />
+        <span className="skeleton-block skeleton-inline donut-total-skeleton donut-total-skeleton-compact" />
+        <span className="skeleton-block skeleton-inline donut-caption-skeleton donut-caption-skeleton-compact" />
+        <span className="skeleton-block skeleton-inline donut-footer-skeleton" />
+      </div>
+    )
+  }
 
   if (displaySlices.length === 0) {
     return (

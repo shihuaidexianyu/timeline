@@ -269,7 +269,10 @@ function App() {
   const pageInfo = pageMeta(page)
   const resolvedSelectedDate = selectedDate ?? timeline?.date ?? '--'
   const weekBars = useMemo(
-    () => buildWeekSeries(monthCalendar?.days ?? [], resolvedSelectedDate),
+    () =>
+      isValidDateKey(resolvedSelectedDate)
+        ? buildWeekSeries(monthCalendar?.days ?? [], resolvedSelectedDate)
+        : [],
     [monthCalendar?.days, resolvedSelectedDate],
   )
   const hasDashboard = dashboard !== null
@@ -1438,6 +1441,9 @@ function daysInMonth(year: number, month: number) {
 function buildWeekSeries(days: DaySummary[], selectedDate: string): WeekBarDatum[] {
   const dayMap = new Map(days.map((day) => [day.date, day]))
   const selected = parseDateString(selectedDate)
+  if (Number.isNaN(selected.getTime())) {
+    return []
+  }
   const weekday = (selected.getUTCDay() + 6) % 7
   const monday = addDays(selected, -weekday)
 
@@ -1454,6 +1460,10 @@ function buildWeekSeries(days: DaySummary[], selectedDate: string): WeekBarDatum
       isSelected: dateKey === selectedDate,
     }
   })
+}
+
+function isValidDateKey(value: string) {
+  return /^\d{4}-\d{2}-\d{2}$/.test(value)
 }
 
 function formatPercent(value: number) {

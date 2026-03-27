@@ -133,14 +133,15 @@ function WeeklyRhythmCard(props: {
     refreshing: boolean
     onSelectDate: (date: string) => void
 }) {
+    const showLoadingSkeleton = props.loading && !props.periodSummary && props.weekBars.length === 0
     const weekActiveTotal = props.periodSummary?.week.active_seconds ?? 0
     const weekFocusTotal = props.periodSummary?.week.focus_seconds ?? 0
     const monthActiveTotal = props.periodSummary?.month.active_seconds ?? 0
     const monthFocusTotal = props.periodSummary?.month.focus_seconds ?? 0
-    const bars = props.loading ? createWeeklySkeletonBars() : props.weekBars
+    const bars = showLoadingSkeleton ? createWeeklySkeletonBars() : props.weekBars
 
     return (
-        <article className="showcase-card showcase-card-dashboard" data-loading={props.loading ? 'true' : 'false'}>
+        <article className="showcase-card showcase-card-dashboard" data-loading={showLoadingSkeleton ? 'true' : 'false'}>
             <div className="showcase-card-head">
                 <div>
                     <h2>本周节奏</h2>
@@ -155,16 +156,16 @@ function WeeklyRhythmCard(props: {
             </div>
 
             <div className="weekly-summary-row">
-                <div className={props.loading ? 'weekly-summary-skeleton' : undefined}>
+                <div className={showLoadingSkeleton ? 'weekly-summary-skeleton' : undefined}>
                     <strong>
-                        {props.loading ? (
+                        {showLoadingSkeleton ? (
                             <span className="skeleton-block skeleton-inline skeleton-stat-value" />
                         ) : (
                             formatDuration(weekActiveTotal)
                         )}
                     </strong>
                     <small>
-                        {props.loading ? (
+                        {showLoadingSkeleton ? (
                             <span className="skeleton-block skeleton-inline skeleton-stat-caption" />
                         ) : (
                             `本周活跃 · 当月 ${formatDuration(monthActiveTotal)}`
@@ -172,16 +173,16 @@ function WeeklyRhythmCard(props: {
                     </small>
                 </div>
 
-                <div className={props.loading ? 'weekly-summary-skeleton' : undefined}>
+                <div className={showLoadingSkeleton ? 'weekly-summary-skeleton' : undefined}>
                     <strong>
-                        {props.loading ? (
+                        {showLoadingSkeleton ? (
                             <span className="skeleton-block skeleton-inline skeleton-stat-value" />
                         ) : (
                             formatDuration(weekFocusTotal)
                         )}
                     </strong>
                     <small>
-                        {props.loading ? (
+                        {showLoadingSkeleton ? (
                             <span className="skeleton-block skeleton-inline skeleton-stat-caption" />
                         ) : (
                             `本周应用 · 当月 ${formatDuration(monthFocusTotal)}`
@@ -193,7 +194,7 @@ function WeeklyRhythmCard(props: {
             <WeeklyBarChart
                 bars={bars}
                 onSelectDate={props.onSelectDate}
-                loading={props.loading}
+                loading={showLoadingSkeleton}
             />
         </article>
     )
@@ -423,11 +424,13 @@ function WeeklyBarChart(props: {
                                         }}
                                     />
                                 </div>
-                                {props.loading ? (
-                                    <span className="skeleton-block skeleton-inline skeleton-weekday-label" />
-                                ) : (
-                                    <span className="weekly-bar-day">{bar.dayLabel}</span>
-                                )}
+                                <span className="weekly-bar-day">
+                                    {props.loading ? (
+                                        <span className="skeleton-block skeleton-inline skeleton-weekday-label" />
+                                    ) : (
+                                        bar.dayLabel
+                                    )}
+                                </span>
                             </button>
                         )
                     })}
@@ -436,13 +439,13 @@ function WeeklyBarChart(props: {
 
             <div className={`weekly-axis ${props.loading ? 'weekly-axis-skeleton' : ''}`}>
                 {axisTicks.map((tick) => (
-                    props.loading ? (
-                        <span key={`label-${tick}`} className="skeleton-block skeleton-inline skeleton-axis-label" />
-                    ) : (
-                        <span key={`label-${tick}`} className="weekly-axis-label">
-                            {formatWeeklyAxisTick(tick)}
-                        </span>
-                    )
+                    <span key={`label-${tick}`} className="weekly-axis-label">
+                        {props.loading ? (
+                            <span className="skeleton-block skeleton-inline skeleton-axis-label" />
+                        ) : (
+                            formatWeeklyAxisTick(tick)
+                        )}
+                    </span>
                 ))}
             </div>
         </div>

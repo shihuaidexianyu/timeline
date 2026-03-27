@@ -44,10 +44,10 @@ export function TimelineClock(props: {
     )
 
     const windowDuration = Math.max(0, props.viewEndSec - props.viewStartSec)
-    
+
     // Calculate window center for move handle position
     const windowCenterSecRaw = props.viewStartSec + windowDuration / 2
-    
+
     const windowStartPoint = pointAtSec(props.viewStartSec, CONTROL_RING_RADIUS)
     const windowEndPoint = pointAtSec(props.viewEndSec, CONTROL_RING_RADIUS)
     // Use raw center + offset for move handle
@@ -77,17 +77,17 @@ export function TimelineClock(props: {
             const nextSec = continuousSec
             if (mode === 'move') {
                 const half = windowDuration / 2
-                
+
                 // Calculate next center position
                 const nextCenter = nextSec + moveCenterOffsetRef.current
-                
+
                 // Position window around center
                 let nextStart = nextCenter - half
-                
+
                 // Strictly clamp to [0, DAY_SECONDS - windowDuration]
                 // No wraparound allowed - prevent crossing midnight
                 nextStart = clamp(nextStart, 0, DAY_SECONDS - windowDuration)
-                
+
                 onWindowChange(nextStart, nextStart + windowDuration)
                 return
             }
@@ -408,7 +408,7 @@ function buildHourLabels() {
 function arcPath(startSec: number, endSec: number, radius: number) {
     const normalStart = normalizeSec(startSec)
     const normalEnd = normalizeSec(endSec)
-    
+
     let duration: number
     if (normalEnd >= normalStart) {
         duration = normalEnd - normalStart
@@ -506,7 +506,7 @@ function distanceBetween(a: { x: number; y: number }, b: { x: number; y: number 
 function windowSectorPath(startSec: number, endSec: number, innerRadius: number, outerRadius: number) {
     const normalStart = normalizeSec(startSec)
     const normalEnd = normalizeSec(endSec)
-    
+
     let duration: number
     if (normalEnd >= normalStart) {
         duration = normalEnd - normalStart

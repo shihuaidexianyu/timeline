@@ -24,11 +24,17 @@ use std::env;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use time::{OffsetDateTime, UtcOffset};
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if let Some(streak_secs) = parse_debug_trigger_health_reminder() {
+        system::show_break_reminder(streak_secs.max(60));
+        std::thread::sleep(std::time::Duration::from_millis(1_200));
+        return Ok(());
+    }
+
     let explicit_config_path = parse_config_path();
     let (config, config_path) = AppConfig::load(explicit_config_path)?;
     init_tracing(config.debug);
@@ -48,6 +54,12 @@ async fn main() -> Result<()> {
         timezone,
         shutdown_tx,
     );
+    if let Err(error) = system::ensure_toast_shortcut_registered(&state) {
+        warn!(
+            ?error,
+            "failed to register Start Menu shortcut for native toast notifications"
+        );
+    }
     trackers::spawn_trackers(state.clone());
     if config.tray_enabled {
         system::spawn_tray(state.clone());
@@ -88,6 +100,20 @@ fn parse_config_path() -> Option<PathBuf> {
     while let Some(argument) = args.next() {
         if argument == "--config" {
             return args.next().map(PathBuf::from);
+        }
+    }
+
+    None
+}
+
+fn parse_debug_trigger_health_reminder() -> Option<i64> {
+    let mut args = env::args().skip(1);
+    while let Some(argument) = args.next() {
+        if argument == "--debug-trigger-health-reminder" {
+            return args
+                .next()
+                .and_then(|value| value.parse::<i64>().ok())
+                .or(Some(3_000));
         }
     }
 

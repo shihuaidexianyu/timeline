@@ -4,6 +4,7 @@ use crate::state::AgentState;
 use anyhow::{Context, Result};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
@@ -15,11 +16,21 @@ use tray_icon::{
     Icon, MouseButton, MouseButtonState, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, accelerator::Accelerator},
 };
-use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::Shell::ShellExecuteW;
+use windows::Win32::Foundation::{HWND, PROPERTYKEY, RPC_E_CHANGED_MODE};
+use windows::Win32::System::Com::StructuredStorage::{
+    PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0, PropVariantClear,
+};
+use windows::Win32::System::Com::{
+    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+    CoTaskMemAlloc, CoUninitialize, IPersistFile,
+};
+use windows::Win32::System::Variant::VT_LPWSTR;
+use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+use windows::Win32::UI::Shell::{IShellLinkW, ShellExecuteW, ShellLink};
 use windows::Win32::UI::WindowsAndMessaging::{
     MB_ICONINFORMATION, MB_OK, MB_SETFOREGROUND, MB_TOPMOST, MessageBoxW, SW_SHOWNORMAL,
 };
+use windows::core::{GUID, Interface, PCWSTR, PWSTR};
 use winrt_notification::{Duration as ToastDuration, Sound, Toast};
 use winreg::RegKey;
 use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
@@ -29,6 +40,13 @@ const AUTOSTART_VALUE_NAME: &str = "TimelineAgent";
 const MENU_OPEN_ID: &str = "open";
 const MENU_QUIT_ID: &str = "quit";
 const BREAK_REMINDER_TITLE: &str = "Timeline 健康提醒";
+pub const TOAST_APP_USER_MODEL_ID: &str = "com.timeline.agent";
+const START_MENU_SHORTCUT_DIR: &str = "Timeline";
+const START_MENU_SHORTCUT_NAME: &str = "Timeline Agent.lnk";
+const PKEY_APP_USER_MODEL_ID: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3),
+    pid: 5,
+};
 
 enum TrayUserEvent {
     TrayClick {
@@ -69,6 +87,37 @@ pub fn set_autostart_enabled(state: &AgentState, enabled: bool) -> Result<bool> 
     autostart_enabled()
 }
 
+/// Ensures a Start Menu shortcut exists with our AppUserModelID so Windows can
+/// attribute native toast notifications to "Timeline" instead of PowerShell.
+pub fn ensure_toast_shortcut_registered(state: &AgentState) -> Result<PathBuf> {
+    let appdata = std::env::var_os("APPDATA")
+        .context("APPDATA is unavailable; cannot register Start Menu shortcut")?;
+    let shortcut_dir = PathBuf::from(appdata)
+        .join("Microsoft")
+        .join("Windows")
+        .join("Start Menu")
+        .join("Programs")
+        .join(START_MENU_SHORTCUT_DIR);
+    std::fs::create_dir_all(&shortcut_dir)
+        .with_context(|| format!("failed to create {:?}", shortcut_dir))?;
+
+    let shortcut_path = shortcut_dir.join(START_MENU_SHORTCUT_NAME);
+    let exe_path = std::env::current_exe().context("failed to resolve current executable path")?;
+    let working_dir = exe_path.parent().unwrap_or(Path::new("."));
+    let arguments = state
+        .config_path()
+        .map(|path| format!(r#"--config "{}""#, path.display()));
+
+    write_shortcut_with_aumid(
+        &shortcut_path,
+        &exe_path,
+        working_dir,
+        arguments.as_deref(),
+        TOAST_APP_USER_MODEL_ID,
+    )?;
+    Ok(shortcut_path)
+}
+
 pub fn open_frontend(url: &str) -> Result<()> {
     let operation = to_wide("open");
     let target = to_wide(url);
@@ -96,6 +145,129 @@ fn to_wide(value: &str) -> Vec<u16> {
     OsStr::new(value).encode_wide().chain(Some(0)).collect()
 }
 
+fn to_wide_os(value: &OsStr) -> Vec<u16> {
+    value.encode_wide().chain(Some(0)).collect()
+}
+
+fn write_shortcut_with_aumid(
+    shortcut_path: &Path,
+    exe_path: &Path,
+    working_dir: &Path,
+    arguments: Option<&str>,
+    app_user_model_id: &str,
+) -> Result<()> {
+    struct CoInitializeGuard;
+    impl Drop for CoInitializeGuard {
+        fn drop(&mut self) {
+            unsafe {
+                CoUninitialize();
+            }
+        }
+    }
+
+    let coinit_result = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    let _co_guard = if coinit_result == RPC_E_CHANGED_MODE {
+        None
+    } else {
+        coinit_result
+            .ok()
+            .context("failed to initialize COM for shortcut registration")?;
+        Some(CoInitializeGuard)
+    };
+
+    let shell_link: IShellLinkW = unsafe {
+        CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
+            .context("failed to create IShellLinkW COM instance")?
+    };
+
+    let exe_wide = to_wide_os(exe_path.as_os_str());
+    unsafe {
+        shell_link
+            .SetPath(PCWSTR(exe_wide.as_ptr()))
+            .context("failed to set shortcut target path")?;
+    }
+
+    if let Some(arguments) = arguments
+        && !arguments.trim().is_empty()
+    {
+        let arguments_wide = to_wide(arguments);
+        unsafe {
+            shell_link
+                .SetArguments(PCWSTR(arguments_wide.as_ptr()))
+                .context("failed to set shortcut arguments")?;
+        }
+    }
+
+    let description_wide = to_wide("Timeline Agent");
+    unsafe {
+        shell_link
+            .SetDescription(PCWSTR(description_wide.as_ptr()))
+            .context("failed to set shortcut description")?;
+    }
+
+    let working_dir_wide = to_wide_os(working_dir.as_os_str());
+    unsafe {
+        shell_link
+            .SetWorkingDirectory(PCWSTR(working_dir_wide.as_ptr()))
+            .context("failed to set shortcut working directory")?;
+        shell_link
+            .SetIconLocation(PCWSTR(exe_wide.as_ptr()), 0)
+            .context("failed to set shortcut icon")?;
+    }
+
+    let property_store: IPropertyStore = shell_link
+        .cast()
+        .context("failed to cast IShellLinkW to IPropertyStore")?;
+    let mut app_id_prop = init_prop_variant_from_string(app_user_model_id)?;
+    let property_result = unsafe {
+        property_store
+            .SetValue(&PKEY_APP_USER_MODEL_ID, &app_id_prop)
+            .and_then(|_| property_store.Commit())
+    };
+    unsafe {
+        let _ = PropVariantClear(&mut app_id_prop);
+    }
+    property_result.context("failed to stamp AppUserModelID on Start Menu shortcut")?;
+
+    let persist_file: IPersistFile = shell_link
+        .cast()
+        .context("failed to cast IShellLinkW to IPersistFile")?;
+    let shortcut_wide = to_wide_os(shortcut_path.as_os_str());
+    unsafe {
+        persist_file
+            .Save(PCWSTR(shortcut_wide.as_ptr()), true)
+            .with_context(|| format!("failed to save shortcut to {:?}", shortcut_path))?;
+    }
+
+    Ok(())
+}
+
+fn init_prop_variant_from_string(value: &str) -> Result<PROPVARIANT> {
+    let value_wide = to_wide(value);
+    let bytes = value_wide.len() * std::mem::size_of::<u16>();
+    let raw_ptr = unsafe { CoTaskMemAlloc(bytes) } as *mut u16;
+    if raw_ptr.is_null() {
+        anyhow::bail!("CoTaskMemAlloc failed while building AppUserModelID PROPVARIANT");
+    }
+
+    unsafe {
+        std::ptr::copy_nonoverlapping(value_wide.as_ptr(), raw_ptr, value_wide.len());
+    }
+    Ok(PROPVARIANT {
+        Anonymous: PROPVARIANT_0 {
+            Anonymous: std::mem::ManuallyDrop::new(PROPVARIANT_0_0 {
+                vt: VT_LPWSTR,
+                wReserved1: 0,
+                wReserved2: 0,
+                wReserved3: 0,
+                Anonymous: PROPVARIANT_0_0_0 {
+                    pwszVal: PWSTR(raw_ptr),
+                },
+            }),
+        },
+    })
+}
+
 pub fn show_break_reminder(streak_secs: i64) {
     let active_minutes = ((streak_secs + 59) / 60).max(1);
     let message = format!("你已连续活跃约 {active_minutes} 分钟，建议起身活动 3-5 分钟。");
@@ -117,7 +289,7 @@ pub fn show_break_reminder(streak_secs: i64) {
 }
 
 fn show_break_reminder_toast(title: &str, message: &str) -> Result<()> {
-    Toast::new("Timeline.Agent")
+    Toast::new(TOAST_APP_USER_MODEL_ID)
         .title(title)
         .text1(message)
         .duration(ToastDuration::Short)

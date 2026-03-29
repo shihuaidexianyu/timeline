@@ -71,6 +71,8 @@ export type AgentSettingsResponse = {
   launch_command: string
   idle_threshold_secs: number
   poll_interval_millis: number
+  health_reminder_enabled: boolean
+  health_reminder_threshold_secs: number
   record_window_titles: boolean
   record_page_titles: boolean
   ignored_apps: string[]
@@ -89,6 +91,8 @@ export type UpdateAutostartResponse = {
 export type UpdateAgentConfigRequest = {
   idle_threshold_secs: number
   poll_interval_millis: number
+  health_reminder_enabled: boolean
+  health_reminder_threshold_secs: number
   record_window_titles: boolean
   record_page_titles: boolean
   ignored_apps: string[]
@@ -190,6 +194,12 @@ export function getAgentSettings() {
       typeof raw.idle_threshold_secs === 'number' ? raw.idle_threshold_secs : 300,
     poll_interval_millis:
       typeof raw.poll_interval_millis === 'number' ? raw.poll_interval_millis : 1000,
+    health_reminder_enabled:
+      typeof raw.health_reminder_enabled === 'boolean' ? raw.health_reminder_enabled : true,
+    health_reminder_threshold_secs:
+      typeof raw.health_reminder_threshold_secs === 'number'
+        ? raw.health_reminder_threshold_secs
+        : 3000,
     record_window_titles:
       typeof raw.record_window_titles === 'boolean' ? raw.record_window_titles : true,
     record_page_titles:

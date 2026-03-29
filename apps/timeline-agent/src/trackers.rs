@@ -3,9 +3,11 @@
 use crate::state::{
     AgentState, OpenBrowserSegment, OpenFocusSegment, OpenPresenceSegment, RuntimeConfigSnapshot,
 };
+use crate::system;
 use crate::windows::{ForegroundWindowSnapshot, capture_foreground_window, detect_presence};
 use anyhow::Result;
 use common::{AppInfo, PresenceState};
+use serde::Serialize;
 use std::time::Duration;
 use time::OffsetDateTime;
 use tokio::time::sleep;
@@ -58,7 +60,8 @@ async fn run_presence_tracker(state: AgentState) -> Result<()> {
                 }
             };
 
-        sync_presence_state(&state, presence, observed_at).await?;
+        sync_presence_state(&state, presence.clone(), observed_at).await?;
+        maybe_emit_health_reminder(&state, &runtime_config, &presence, observed_at).await?;
         sleep(Duration::from_millis(runtime_config.poll_interval_millis)).await;
     }
 }
@@ -203,6 +206,67 @@ async fn sync_presence_state(
         id,
         state: presence,
     });
+
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+struct HealthReminderEvent {
+    threshold_secs: u64,
+    streak_secs: i64,
+}
+
+async fn maybe_emit_health_reminder(
+    state: &AgentState,
+    runtime_config: &RuntimeConfigSnapshot,
+    presence: &PresenceState,
+    observed_at: OffsetDateTime,
+) -> Result<()> {
+    let mut should_notify = false;
+    let mut streak_secs = 0i64;
+    let threshold_secs = runtime_config.health_reminder_threshold_secs.max(1);
+
+    {
+        let mut runtime = state.runtime().await;
+        let reminder = &mut runtime.health_reminder;
+
+        if !runtime_config.health_reminder_enabled {
+            reminder.active_streak_started_at = None;
+            reminder.reminded_for_current_streak = false;
+            return Ok(());
+        }
+
+        match presence {
+            PresenceState::Active => {
+                let started_at = reminder.active_streak_started_at.get_or_insert(observed_at);
+                let elapsed = (observed_at - *started_at).whole_seconds().max(0);
+                if elapsed >= threshold_secs as i64 && !reminder.reminded_for_current_streak {
+                    reminder.reminded_for_current_streak = true;
+                    should_notify = true;
+                    streak_secs = elapsed;
+                }
+            }
+            PresenceState::Idle | PresenceState::Locked => {
+                reminder.active_streak_started_at = None;
+                reminder.reminded_for_current_streak = false;
+            }
+        }
+    }
+
+    if should_notify {
+        state
+            .store()
+            .append_raw_event(
+                "health_break_reminder",
+                &HealthReminderEvent {
+                    threshold_secs,
+                    streak_secs,
+                },
+                observed_at,
+            )
+            .await?;
+        system::show_break_reminder(streak_secs);
+    }
 
     Ok(())
 }

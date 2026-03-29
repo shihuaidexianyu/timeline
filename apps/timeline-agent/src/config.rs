@@ -16,6 +16,8 @@ pub struct AppConfig {
     pub web_ui_url: String,
     pub idle_threshold_secs: u64,
     pub poll_interval_millis: u64,
+    pub health_reminder_enabled: bool,
+    pub health_reminder_threshold_secs: u64,
     pub debug: bool,
     pub tray_enabled: bool,
     pub record_window_titles: bool,
@@ -33,6 +35,8 @@ impl Default for AppConfig {
             web_ui_url: "http://127.0.0.1:46215/#/stats".to_string(),
             idle_threshold_secs: 300, // 5 minutes — standard idle detection threshold
             poll_interval_millis: 1_000, // 1 second — balances responsiveness vs CPU cost
+            health_reminder_enabled: true,
+            health_reminder_threshold_secs: 3_000, // 50 minutes — ergonomic reminder baseline
             debug: true,
             tray_enabled: true,
             record_window_titles: true,

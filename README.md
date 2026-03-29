@@ -34,6 +34,7 @@
 - 提供每日时间线、应用统计、域名统计、专注统计 API
 - 提供本地 Web UI
 - 提供系统托盘入口
+- 支持连续活跃超阈值后的健康休息提醒
 - 支持开机自启动开关
 - 支持从 GitHub Release latest 在线升级便携版
 
@@ -112,6 +113,10 @@ npm run dev
   托盘和设置页里展示的 Web UI 地址
 - `idle_threshold_secs`
   多久无输入后判定为 idle
+- `health_reminder_enabled`
+  是否启用连续活跃后的休息提醒
+- `health_reminder_threshold_secs`
+  连续活跃达到多少秒后触发提醒
 - `tray_enabled`
   是否启用系统托盘
 - `record_window_titles`

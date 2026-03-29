@@ -149,6 +149,8 @@ async fn get_settings(
         launch_command: state.launch_command(),
         idle_threshold_secs: runtime_config.idle_threshold_secs,
         poll_interval_millis: runtime_config.poll_interval_millis,
+        health_reminder_enabled: runtime_config.health_reminder_enabled,
+        health_reminder_threshold_secs: runtime_config.health_reminder_threshold_secs,
         record_window_titles: runtime_config.record_window_titles,
         record_page_titles: runtime_config.record_page_titles,
         ignored_apps: runtime_config.ignored_apps,
@@ -200,6 +202,8 @@ async fn post_update_agent_config(
     let mut next = state.config().clone();
     next.idle_threshold_secs = payload.idle_threshold_secs;
     next.poll_interval_millis = payload.poll_interval_millis;
+    next.health_reminder_enabled = payload.health_reminder_enabled;
+    next.health_reminder_threshold_secs = payload.health_reminder_threshold_secs;
     next.record_window_titles = payload.record_window_titles;
     next.record_page_titles = payload.record_page_titles;
     next.ignored_apps = sanitize_list(payload.ignored_apps);
@@ -470,6 +474,13 @@ fn validate_agent_config_payload(payload: &UpdateAgentConfigRequest) -> Result<(
         return Err(AppError::bad_request(
             "invalid_poll_interval",
             "poll_interval_millis must be between 250 and 5000 milliseconds",
+        ));
+    }
+
+    if !(300..=21600).contains(&payload.health_reminder_threshold_secs) {
+        return Err(AppError::bad_request(
+            "invalid_health_reminder_threshold",
+            "health_reminder_threshold_secs must be between 300 and 21600 seconds",
         ));
     }
 

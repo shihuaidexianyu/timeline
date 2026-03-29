@@ -144,6 +144,8 @@ pub struct AgentSettingsResponse {
     pub launch_command: String,
     pub idle_threshold_secs: u64,
     pub poll_interval_millis: u64,
+    pub health_reminder_enabled: bool,
+    pub health_reminder_threshold_secs: u64,
     pub record_window_titles: bool,
     pub record_page_titles: bool,
     pub ignored_apps: Vec<String>,
@@ -165,6 +167,8 @@ pub struct UpdateAutostartResponse {
 pub struct UpdateAgentConfigRequest {
     pub idle_threshold_secs: u64,
     pub poll_interval_millis: u64,
+    pub health_reminder_enabled: bool,
+    pub health_reminder_threshold_secs: u64,
     pub record_window_titles: bool,
     pub record_page_titles: bool,
     pub ignored_apps: Vec<String>,

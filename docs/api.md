@@ -49,6 +49,23 @@
 
 读取最近的原始事件，仅用于本地调试。
 
+## `GET /api/settings`
+
+返回本地服务运行参数与监视器状态，包含：
+
+- `idle_threshold_secs`
+- `poll_interval_millis`
+- `health_reminder_enabled`
+- `health_reminder_threshold_secs`
+- `record_window_titles`
+- `record_page_titles`
+- `ignored_apps`
+- `ignored_domains`
+
+## `POST /api/settings/config`
+
+更新采集和提醒配置。健康提醒阈值当前约束为 `300..=21600` 秒。
+
 ## `POST /api/events/browser`
 
 示例：

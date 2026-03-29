@@ -17,6 +17,7 @@
 4. 浏览器扩展在标签切换、URL 变化、窗口焦点变化和心跳时上报域名事件
 5. 本地服务只在前台应用确认为浏览器时维护 `browser_segment`
 6. Web UI 按日期读取 `focus_segments`、`browser_segments` 和 `presence_segments`
+7. Presence 连续 `active` 超过健康阈值时触发本地休息提醒
 
 ## segment 规则
 
@@ -40,6 +41,7 @@
 - `idle`：最近输入时间超过 idle 阈值
 - `locked`：输入桌面切换到 `Winlogon` 或其他非默认桌面
 - `locked` 优先级高于 `idle`
+- 连续 `active` 超过 `health_reminder_threshold_secs` 后只提醒一次，直到进入 `idle/locked` 才重置
 
 ## “真实使用时间”口径
 

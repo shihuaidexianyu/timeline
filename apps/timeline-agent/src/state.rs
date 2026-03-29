@@ -14,6 +14,7 @@ pub struct RuntimeState {
     pub current_focus: Option<OpenFocusSegment>,
     pub current_presence: Option<OpenPresenceSegment>,
     pub current_browser: Option<OpenBrowserSegment>,
+    pub health_reminder: HealthReminderRuntime,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -45,10 +46,18 @@ pub struct OpenBrowserSegment {
     pub tab_id: i64,
 }
 
+#[derive(Debug, Default, Clone)]
+pub struct HealthReminderRuntime {
+    pub active_streak_started_at: Option<OffsetDateTime>,
+    pub reminded_for_current_streak: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct RuntimeConfigSnapshot {
     pub idle_threshold_secs: u64,
     pub poll_interval_millis: u64,
+    pub health_reminder_enabled: bool,
+    pub health_reminder_threshold_secs: u64,
     pub record_window_titles: bool,
     pub record_page_titles: bool,
     pub ignored_apps: Vec<String>,
@@ -60,6 +69,8 @@ impl RuntimeConfigSnapshot {
         Self {
             idle_threshold_secs: config.idle_threshold_secs,
             poll_interval_millis: config.poll_interval_millis,
+            health_reminder_enabled: config.health_reminder_enabled,
+            health_reminder_threshold_secs: config.health_reminder_threshold_secs,
             record_window_titles: config.record_window_titles,
             record_page_titles: config.record_page_titles,
             ignored_apps: config.ignored_apps.clone(),

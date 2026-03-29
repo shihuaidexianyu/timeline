@@ -497,6 +497,9 @@ function App() {
                             ...current,
                             idle_threshold_secs: payload.idle_threshold_secs,
                             poll_interval_millis: payload.poll_interval_millis,
+                            health_reminder_enabled: payload.health_reminder_enabled,
+                            health_reminder_threshold_secs:
+                              payload.health_reminder_threshold_secs,
                             record_window_titles: payload.record_window_titles,
                             record_page_titles: payload.record_page_titles,
                             ignored_apps: payload.ignored_apps,
@@ -815,6 +818,8 @@ function SettingsPage(props: {
   onUpdateConfig: (payload: {
     idle_threshold_secs: number
     poll_interval_millis: number
+    health_reminder_enabled: boolean
+    health_reminder_threshold_secs: number
     record_window_titles: boolean
     record_page_titles: boolean
     ignored_apps: string[]
@@ -825,6 +830,8 @@ function SettingsPage(props: {
 }) {
   const [idleThresholdSecs, setIdleThresholdSecs] = useState(60)
   const [pollIntervalMillis, setPollIntervalMillis] = useState(1000)
+  const [healthReminderEnabled, setHealthReminderEnabled] = useState(true)
+  const [healthReminderThresholdSecs, setHealthReminderThresholdSecs] = useState(3000)
   const [recordWindowTitles, setRecordWindowTitles] = useState(true)
   const [recordPageTitles, setRecordPageTitles] = useState(true)
   const [ignoredAppsText, setIgnoredAppsText] = useState('')
@@ -847,6 +854,12 @@ function SettingsPage(props: {
         ? props.agentSettings.poll_interval_millis
         : 1000,
     )
+    setHealthReminderEnabled(Boolean(props.agentSettings.health_reminder_enabled))
+    setHealthReminderThresholdSecs(
+      Number.isFinite(props.agentSettings.health_reminder_threshold_secs)
+        ? props.agentSettings.health_reminder_threshold_secs
+        : 3000,
+    )
     setRecordWindowTitles(Boolean(props.agentSettings.record_window_titles))
     setRecordPageTitles(Boolean(props.agentSettings.record_page_titles))
     setIgnoredAppsText(
@@ -865,6 +878,12 @@ function SettingsPage(props: {
     await props.onUpdateConfig({
       idle_threshold_secs: clampNumber(Math.round(idleThresholdSecs), 15, 1800),
       poll_interval_millis: clampNumber(Math.round(pollIntervalMillis), 250, 5000),
+      health_reminder_enabled: healthReminderEnabled,
+      health_reminder_threshold_secs: clampNumber(
+        Math.round(healthReminderThresholdSecs),
+        300,
+        21600,
+      ),
       record_window_titles: recordWindowTitles,
       record_page_titles: recordPageTitles,
       ignored_apps: parseConfigList(ignoredAppsText),
@@ -1054,7 +1073,7 @@ function SettingsPage(props: {
             {props.loading ? (
               <SettingsConfigSkeleton />
             ) : (
-              <div className="settings-config-grid" role="group" aria-label="采集阈值和过滤设置">
+              <div className="settings-config-grid" role="group" aria-label="采集、提醒与过滤设置">
                 <label className="settings-config-field">
                   <span>空闲阈值（秒）</span>
                   <input
@@ -1082,6 +1101,35 @@ function SettingsPage(props: {
                   />
                   <small className="settings-config-help">
                     越小越实时但资源占用更高；建议保持 500~1500 毫秒。
+                  </small>
+                </label>
+
+                <label className="settings-config-check">
+                  <input
+                    type="checkbox"
+                    checked={healthReminderEnabled}
+                    onChange={(event) => setHealthReminderEnabled(event.target.checked)}
+                  />
+                  <span>
+                    健康休息提醒
+                    <small>连续活跃超过阈值后发送系统提醒，建议保持开启。</small>
+                  </span>
+                </label>
+
+                <label className="settings-config-field">
+                  <span>休息提醒阈值（秒）</span>
+                  <input
+                    type="number"
+                    min={300}
+                    max={21600}
+                    step={60}
+                    value={healthReminderThresholdSecs}
+                    disabled={!healthReminderEnabled}
+                    onChange={(event) =>
+                      setHealthReminderThresholdSecs(Number(event.target.value) || 0)}
+                  />
+                  <small className="settings-config-help">
+                    默认 3000 秒（50 分钟），进入 Idle/Locked 后会重新计时。
                   </small>
                 </label>
 

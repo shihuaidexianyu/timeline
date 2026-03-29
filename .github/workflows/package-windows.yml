@@ -29,6 +29,32 @@ jobs:
           cache: npm
           cache-dependency-path: apps/web-ui/package-lock.json
 
+      - name: Verify version files are synchronized
+        shell: pwsh
+        run: .\scripts\sync-version.ps1 -CheckOnly
+
+      - name: Verify release tag matches workspace version
+        if: github.event_name == 'release' || github.event.inputs.release_tag != ''
+        shell: pwsh
+        run: |
+          $cargoToml = Join-Path $PWD 'Cargo.toml'
+          $content = Get-Content -LiteralPath $cargoToml -Raw
+          if ($content -notmatch '(?ms)^\[workspace\.package\]\s+.*?^version\s*=\s*"([^"]+)"') {
+            throw "Failed to parse [workspace.package].version from $cargoToml"
+          }
+          $workspaceVersion = $Matches[1]
+
+          $rawTag = if ('${{ github.event_name }}' -eq 'release') { '${{ github.event.release.tag_name }}' } else { '${{ github.event.inputs.release_tag }}' }
+          $normalizedTag = $rawTag -replace '^v', ''
+
+          if ([string]::IsNullOrWhiteSpace($rawTag)) {
+            throw 'Expected a release tag but none was provided.'
+          }
+
+          if ($normalizedTag -ne $workspaceVersion) {
+            throw "Release tag '$rawTag' does not match workspace version '$workspaceVersion'."
+          }
+
       - name: Install web-ui dependencies
         working-directory: apps/web-ui
         shell: pwsh

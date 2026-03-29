@@ -132,6 +132,28 @@ npm run dev
 
 仓库当前只保留便携包产物，不再生成安装器。
 
+### 版本号单点维护
+
+项目以根目录 [Cargo.toml](Cargo.toml) 的 `[workspace.package].version` 作为唯一版本来源。
+
+同步命令：
+
+```powershell
+.\scripts\sync-version.ps1
+```
+
+该脚本会把版本同步到：
+
+- `apps/web-ui/package.json`
+- `apps/web-ui/package-lock.json`
+- `apps/browser-extension/manifest.json`
+
+只校验不修改：
+
+```powershell
+.\scripts\sync-version.ps1 -CheckOnly
+```
+
 ### 前置条件
 
 1. 安装 Node.js / npm

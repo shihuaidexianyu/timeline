@@ -48,10 +48,13 @@ function Remove-PathIfExists {
 }
 
 $repoRoot = Get-RepoRoot
+$syncVersionScript = Join-Path $repoRoot 'scripts\sync-version.ps1'
 $webUiDir = Join-Path $repoRoot 'apps\web-ui'
 $extensionDir = Join-Path $repoRoot 'apps\browser-extension'
 $outputRoot = Join-Path $repoRoot 'target\portable\output'
 $portableRoot = Join-Path $repoRoot 'target\portable\stage'
+
+& $syncVersionScript
 
 $cargoMetadataJson = & cargo metadata --no-deps --format-version 1 --manifest-path (Join-Path $repoRoot 'Cargo.toml')
 $cargoMetadata = $cargoMetadataJson | ConvertFrom-Json

@@ -22,6 +22,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tao = "0.34"
 tray-icon = "0.21.3"
+winrt-notification = "0.5.1"
 winreg = "0.55.0"
 windows = { version = "0.62.2", features = [
   "Win32_Foundation",

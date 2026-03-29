@@ -4,7 +4,6 @@ use crate::state::AgentState;
 use anyhow::{Context, Result};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
-use std::process::Command;
 use std::time::{Duration, Instant};
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
@@ -21,6 +20,7 @@ use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     MB_ICONINFORMATION, MB_OK, MB_SETFOREGROUND, MB_TOPMOST, MessageBoxW, SW_SHOWNORMAL,
 };
+use winrt_notification::{Duration as ToastDuration, Sound, Toast};
 use winreg::RegKey;
 use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
 
@@ -29,28 +29,6 @@ const AUTOSTART_VALUE_NAME: &str = "TimelineAgent";
 const MENU_OPEN_ID: &str = "open";
 const MENU_QUIT_ID: &str = "quit";
 const BREAK_REMINDER_TITLE: &str = "Timeline 健康提醒";
-const BREAK_REMINDER_TOAST_SCRIPT: &str = r#"
-$ErrorActionPreference = 'Stop'
-[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-[Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
-$title = [System.Security.SecurityElement]::Escape($env:TIMELINE_TOAST_TITLE)
-$message = [System.Security.SecurityElement]::Escape($env:TIMELINE_TOAST_MESSAGE)
-[xml]$toastXml = @"
-<toast>
-  <visual>
-    <binding template='ToastGeneric'>
-      <text>$title</text>
-      <text>$message</text>
-    </binding>
-  </visual>
-</toast>
-"@
-$xml = New-Object Windows.Data.Xml.Dom.XmlDocument
-$xml.LoadXml($toastXml.OuterXml)
-$toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
-$notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('TimelineAgent')
-$notifier.Show($toast)
-"#;
 
 enum TrayUserEvent {
     TrayClick {
@@ -139,29 +117,13 @@ pub fn show_break_reminder(streak_secs: i64) {
 }
 
 fn show_break_reminder_toast(title: &str, message: &str) -> Result<()> {
-    let status = Command::new("powershell")
-        .args([
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-WindowStyle",
-            "Hidden",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            BREAK_REMINDER_TOAST_SCRIPT,
-        ])
-        .env("TIMELINE_TOAST_TITLE", title)
-        .env("TIMELINE_TOAST_MESSAGE", message)
-        .status()
-        .context("failed to launch powershell for toast reminder")?;
-
-    if !status.success() {
-        anyhow::bail!(
-            "powershell toast reminder exited with status {:?}",
-            status.code()
-        );
-    }
+    Toast::new("Timeline.Agent")
+        .title(title)
+        .text1(message)
+        .duration(ToastDuration::Short)
+        .sound(Some(Sound::Default))
+        .show()
+        .context("failed to show Windows toast reminder")?;
 
     Ok(())
 }

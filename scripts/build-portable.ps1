@@ -116,15 +116,30 @@ New-Item -ItemType Directory -Path $portableRoot -Force | Out-Null
 $portableStage = Join-Path $portableRoot "timeline-portable-$packageVersion"
 $portableWebUiStage = Join-Path $portableStage 'web-ui\dist'
 $portableExtensionStage = Join-Path $portableStage 'browser-extension'
+$portableVersionsRoot = Join-Path $portableStage 'versions'
+$portableVersionStage = Join-Path $portableVersionsRoot $packageVersion
+$portableVersionWebUiStage = Join-Path $portableVersionStage 'web-ui\dist'
+$portableVersionExtensionStage = Join-Path $portableVersionStage 'browser-extension'
 $portableConfigDir = Join-Path $portableStage 'config'
 $portableDataDir = Join-Path $portableStage 'data'
 
-New-Item -ItemType Directory -Path $portableStage, $portableWebUiStage, $portableExtensionStage, $portableConfigDir, $portableDataDir -Force | Out-Null
+New-Item -ItemType Directory -Path $portableStage, $portableWebUiStage, $portableExtensionStage, $portableVersionWebUiStage, $portableVersionExtensionStage, $portableConfigDir, $portableDataDir -Force | Out-Null
 
 Copy-Item -Path $agentBinary -Destination (Join-Path $portableStage 'timeline.exe') -Force
+Copy-Item -Path $agentBinary -Destination (Join-Path $portableVersionStage 'timeline.exe') -Force
 Copy-DirectoryContents -Source $webUiDist -Destination $portableWebUiStage
+Copy-DirectoryContents -Source $webUiDist -Destination $portableVersionWebUiStage
 Copy-DirectoryContents -Source $extensionDir -Destination $portableExtensionStage
+Copy-DirectoryContents -Source $extensionDir -Destination $portableVersionExtensionStage
 Copy-Item -Path (Join-Path $repoRoot 'config\timeline.example.toml') -Destination (Join-Path $portableConfigDir 'timeline.example.toml') -Force
+
+$currentVersionState = @"
+{
+  "current_version": "$packageVersion",
+  "updated_at": "$(Get-Date -Format o)"
+}
+"@
+Set-Content -Path (Join-Path $portableStage 'current.json') -Value $currentVersionState -Encoding UTF8
 
 $portableReadme = @'
 Timeline 便携包内容
@@ -132,9 +147,11 @@ Timeline 便携包内容
 
 解压后会包含：
 
-1. timeline.exe
-2. 内置的 web-ui/dist 前端静态文件
-3. browser-extension 浏览器扩展目录
+1. timeline.exe（稳定入口）
+2. versions\<version>\timeline.exe（当前版本后端）
+3. 内置的 web-ui/dist 前端静态文件
+4. browser-extension 浏览器扩展目录
+5. current.json（当前激活版本指针）
 
 便携版默认把用户数据写到：
 .\data

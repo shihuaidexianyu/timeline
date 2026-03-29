@@ -24,6 +24,7 @@ tao = "0.34"
 tray-icon = "0.21.3"
 winrt-notification = "0.5.1"
 winreg = "0.55.0"
+zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
 windows = { version = "0.62.2", features = [
   "Win32_Foundation",
   "Win32_System_Com",

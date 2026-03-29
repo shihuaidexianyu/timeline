@@ -31,9 +31,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MB_ICONINFORMATION, MB_OK, MB_SETFOREGROUND, MB_TOPMOST, MessageBoxW, SW_SHOWNORMAL,
 };
 use windows::core::{GUID, Interface, PCWSTR, PWSTR};
-use winrt_notification::{Duration as ToastDuration, Sound, Toast};
 use winreg::RegKey;
 use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
+use winrt_notification::{Duration as ToastDuration, Sound, Toast};
 
 const AUTOSTART_REG_PATH: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const AUTOSTART_VALUE_NAME: &str = "Timeline";
@@ -102,7 +102,7 @@ pub fn ensure_toast_shortcut_registered(state: &AgentState) -> Result<PathBuf> {
         .with_context(|| format!("failed to create {:?}", shortcut_dir))?;
 
     let shortcut_path = shortcut_dir.join(START_MENU_SHORTCUT_NAME);
-    let exe_path = std::env::current_exe().context("failed to resolve current executable path")?;
+    let exe_path = state.launch_executable_path();
     let working_dir = exe_path.parent().unwrap_or(Path::new("."));
     let arguments = state
         .config_path()

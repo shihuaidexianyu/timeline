@@ -156,13 +156,17 @@ npm run dev
 
 ### 便携包布局
 
-- `timeline.exe`
+- `timeline.exe`（稳定入口，启动器 + 后端双模式）
 - `config\timeline.toml`
 - `data\`
 - `web-ui\dist\`
 - `browser-extension\`
+- `versions\<version>\timeline.exe`
+- `versions\<version>\web-ui\dist\`
+- `versions\<version>\browser-extension\`
+- `current.json`（当前激活版本指针）
 
-便携包不再额外生成启动脚本，直接运行 `timeline.exe` 即可。
+便携包不再额外生成启动脚本，直接运行 `timeline.exe` 即可。启动器会根据 `current.json` 自动拉起当前版本后端。
 
 ### 在线升级
 
@@ -172,8 +176,10 @@ npm run dev
 
 1. 请求 GitHub Release `latest`
 2. 下载最新的 `timeline-portable-*.zip`
-3. 在 agent 退出后覆盖程序文件
-4. 自动重新启动 `timeline.exe`
+3. 将新版本写入 `versions\<new-version>\`
+4. 原子切换 `current.json`
+5. 自动重启 `timeline.exe` 并做健康检查
+6. 健康检查失败时自动回滚到上一个版本
 
 升级时会保留本地：
 

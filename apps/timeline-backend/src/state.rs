@@ -1,6 +1,6 @@
 //! Shared runtime state for open segments and global application dependencies.
 
-use crate::{config::AppConfig, db::AgentStore};
+use crate::{config::AppConfig, db::AgentStore, layout};
 use std::path::PathBuf;
 use std::sync::{
     Arc,
@@ -176,15 +176,24 @@ impl AgentState {
     }
 
     pub fn launch_command(&self) -> String {
-        let current_exe = std::env::current_exe()
-            .map(|path| path.display().to_string())
-            .unwrap_or_else(|_| "timeline".to_string());
+        let launch_exe = self.launch_executable_path();
+        let launch_exe = launch_exe.display().to_string();
 
         if let Some(config_path) = self.config_path() {
-            return format!(r#""{}" --config "{}""#, current_exe, config_path.display());
+            return format!(r#""{}" --config "{}""#, launch_exe, config_path.display());
         }
 
-        format!(r#""{}""#, current_exe)
+        format!(r#""{}""#, launch_exe)
+    }
+
+    pub fn launch_executable_path(&self) -> PathBuf {
+        if let Ok(path) = layout::resolve_launcher_executable()
+            && path.is_file()
+        {
+            return path;
+        }
+
+        std::env::current_exe().unwrap_or_else(|_| PathBuf::from("timeline.exe"))
     }
 
     pub fn request_shutdown(&self) {

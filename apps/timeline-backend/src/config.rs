@@ -364,9 +364,7 @@ mod tests {
     fn still_discovers_repo_dist_for_dev_binaries() {
         let candidates = web_ui_dist_candidates(
             Some(Path::new(r"C:\Users\me\repo")),
-            Some(Path::new(
-                r"C:\Users\me\repo\target\release\timeline.exe",
-            )),
+            Some(Path::new(r"C:\Users\me\repo\target\release\timeline.exe")),
         );
 
         assert_eq!(

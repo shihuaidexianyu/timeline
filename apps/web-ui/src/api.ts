@@ -130,6 +130,13 @@ type ApiEnvelope<T> = {
   } | null
 }
 
+type RequestOptions = {
+  method?: 'GET' | 'POST'
+  body?: unknown
+  fallbackError: string
+  signal?: AbortSignal
+}
+
 /** Resolves the agent API base URL.
  *  - In production (self-hosted mode), the frontend is served by the agent itself, so
  *    `window.location.origin` points to the correct address.
@@ -150,23 +157,77 @@ function isLocalDevServer() {
   )
 }
 
-async function request<T>(path: string): Promise<T> {
+async function request<T>(path: string, options?: Partial<RequestOptions>): Promise<T> {
+  const requestOptions: RequestOptions = {
+    method: 'GET',
+    fallbackError: '本地服务响应异常',
+    ...options,
+  }
   let response: Response
   try {
-    response = await fetch(`${API_BASE_URL}${path}`)
-  } catch {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      method: requestOptions.method,
+      headers:
+        requestOptions.body === undefined
+          ? undefined
+          : {
+            'Content-Type': 'application/json',
+          },
+      body:
+        requestOptions.body === undefined
+          ? undefined
+          : JSON.stringify(requestOptions.body),
+      signal: requestOptions.signal,
+    })
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw error
+    }
     throw new Error(
       `无法连接本地服务 ${API_BASE_URL}，请确认 timeline 已启动并已允许跨域访问。`,
     )
   }
 
-  const payload = (await response.json()) as ApiEnvelope<T>
+  const payload = await readApiEnvelope<T>(response)
 
   if (!response.ok || !payload.ok || payload.data === null) {
-    throw new Error(payload.error?.message ?? '本地服务响应异常')
+    throw new Error(payload.error?.message ?? requestOptions.fallbackError)
   }
 
   return payload.data
+}
+
+async function readApiEnvelope<T>(response: Response): Promise<ApiEnvelope<T>> {
+  try {
+    const payload = await response.json()
+    if (isApiEnvelope<T>(payload)) {
+      return payload
+    }
+  } catch {
+    // Fall through to a normalized envelope below.
+  }
+
+  return {
+    ok: false,
+    data: null,
+    error: {
+      code: 'invalid_response',
+      message: `本地服务返回了无法解析的响应（HTTP ${response.status}）`,
+    },
+  }
+}
+
+function isApiEnvelope<T>(value: unknown): value is ApiEnvelope<T> {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+
+  const candidate = value as { ok?: unknown; data?: unknown; error?: unknown }
+  return typeof candidate.ok === 'boolean' && 'data' in candidate && 'error' in candidate
+}
+
+function isAbortError(error: unknown) {
+  return error instanceof DOMException && error.name === 'AbortError'
 }
 
 export function getTimeline(date?: string) {
@@ -214,50 +275,26 @@ export function getAppUpdateInfo() {
 }
 
 export async function updateAutostart(payload: UpdateAutostartRequest) {
-  const response = await fetch(`${API_BASE_URL}/api/settings/autostart`, {
+  return request<UpdateAutostartResponse>('/api/settings/autostart', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
+    body: payload,
+    fallbackError: '更新开机自启动设置失败',
   })
-
-  const result = (await response.json()) as ApiEnvelope<UpdateAutostartResponse>
-  if (!response.ok || !result.ok || result.data === null) {
-    throw new Error(result.error?.message ?? '更新开机自启动设置失败')
-  }
-
-  return result.data
 }
 
 export async function updateAgentConfig(payload: UpdateAgentConfigRequest) {
-  const response = await fetch(`${API_BASE_URL}/api/settings/config`, {
+  return request<UpdateAgentConfigResponse>('/api/settings/config', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payload),
+    body: payload,
+    fallbackError: '更新本地配置失败',
   })
-
-  const result = (await response.json()) as ApiEnvelope<UpdateAgentConfigResponse>
-  if (!response.ok || !result.ok || result.data === null) {
-    throw new Error(result.error?.message ?? '更新本地配置失败')
-  }
-
-  return result.data
 }
 
 export async function installLatestUpdate() {
-  const response = await fetch(`${API_BASE_URL}/api/update/install`, {
+  return request<InstallUpdateResponse>('/api/update/install', {
     method: 'POST',
+    fallbackError: '启动在线升级失败',
   })
-
-  const result = (await response.json()) as ApiEnvelope<InstallUpdateResponse>
-  if (!response.ok || !result.ok || result.data === null) {
-    throw new Error(result.error?.message ?? '启动在线升级失败')
-  }
-
-  return result.data
 }
 
 // ── Month calendar and period summary types ──

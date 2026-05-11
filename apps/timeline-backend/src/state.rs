@@ -87,6 +87,7 @@ pub struct AgentStateInner {
     pub timezone: UtcOffset,
     pub runtime_config: RwLock<RuntimeConfigSnapshot>,
     pub runtime: Mutex<RuntimeState>,
+    pub browser_transition: Mutex<()>,
     pub monitors: Mutex<MonitorTelemetry>,
     pub shutdown_requested: AtomicBool,
     pub shutdown_tx: tokio::sync::watch::Sender<bool>,
@@ -116,6 +117,7 @@ impl AgentState {
                 timezone,
                 runtime_config: RwLock::new(runtime_config),
                 runtime: Mutex::new(RuntimeState::default()),
+                browser_transition: Mutex::new(()),
                 monitors: Mutex::new(MonitorTelemetry::default()),
                 shutdown_requested: AtomicBool::new(false),
                 shutdown_tx,
@@ -145,6 +147,10 @@ impl AgentState {
 
     pub async fn runtime(&self) -> tokio::sync::MutexGuard<'_, RuntimeState> {
         self.inner.runtime.lock().await
+    }
+
+    pub async fn browser_transition(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.inner.browser_transition.lock().await
     }
 
     pub async fn runtime_config_snapshot(&self) -> RuntimeConfigSnapshot {

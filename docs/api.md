@@ -45,6 +45,33 @@
 
 返回专注总时长、真实使用时间、切换次数、最长专注块和平均专注块。
 
+## `GET /api/calendar/month?month=2026-03`
+
+返回指定自然月的每日汇总，用于使用热度日历。`month` 省略时使用本地服务时区下的当前月份。
+
+响应字段：
+
+- `month`：`YYYY-MM`
+- `timezone`：本地服务启动时解析到的 UTC offset
+- `days`：每日汇总数组，包含 `focus_seconds`、`active_seconds`、`browser_seconds`、`switch_count`、`top_app`、`top_domain`
+
+## `GET /api/stats/summary?date=2026-03-21`
+
+返回以指定日期为锚点的今日、本周、本月汇总。`date` 省略时使用本地服务时区下的今天。
+
+响应字段：
+
+- `date`
+- `timezone`
+- `today`
+- `week`
+- `month`
+
+其中 `today` / `week` / `month` 均包含：
+
+- `focus_seconds`
+- `active_seconds`
+
 ## `GET /api/debug/recent-events`
 
 读取最近的原始事件，仅用于本地调试。
@@ -79,3 +106,14 @@
   "observed_at": "2026-03-21T11:40:00Z"
 }
 ```
+
+响应表示事件是否被采纳：
+
+```json
+{
+  "accepted": true,
+  "reason": null
+}
+```
+
+当域名在忽略列表中，或当前前台应用不是浏览器时，`accepted` 为 `false`，并返回原因。

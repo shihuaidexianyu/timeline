@@ -82,28 +82,41 @@ async fn sync_focus_snapshot(
     runtime_config: &RuntimeConfigSnapshot,
 ) -> Result<()> {
     let next_fingerprint = snapshot.as_ref().map(ForegroundWindowSnapshot::fingerprint);
-    let mut runtime = state.runtime().await;
-
-    let same_as_current = runtime
-        .current_focus
+    let leaving_browser = snapshot
         .as_ref()
-        .and_then(|current| {
-            next_fingerprint
-                .as_ref()
-                .map(|next| current.fingerprint == *next)
-        })
-        .unwrap_or(false);
-    if same_as_current {
-        if let Some(current) = runtime.current_focus.as_ref() {
-            state
-                .store()
-                .touch_focus_segment(current.id, observed_at)
-                .await?;
+        .map(|value| !value.is_browser)
+        .unwrap_or(true);
+    let (touch_current_id, previous_focus) = {
+        let mut runtime = state.runtime().await;
+        let same_as_current = runtime
+            .current_focus
+            .as_ref()
+            .and_then(|current| {
+                next_fingerprint
+                    .as_ref()
+                    .map(|next| current.fingerprint == *next)
+            })
+            .unwrap_or(false);
+
+        if same_as_current {
+            (
+                runtime.current_focus.as_ref().map(|current| current.id),
+                None,
+            )
+        } else {
+            (None, runtime.current_focus.take())
         }
+    };
+
+    if let Some(current_id) = touch_current_id {
+        state
+            .store()
+            .touch_focus_segment(current_id, observed_at)
+            .await?;
         return Ok(());
     }
 
-    if let Some(previous_focus) = runtime.current_focus.take() {
+    if let Some(previous_focus) = previous_focus {
         state
             .store()
             .end_focus_segment(previous_focus.id, observed_at)
@@ -113,12 +126,13 @@ async fn sync_focus_snapshot(
     // If the new foreground app is NOT a browser (or no window is focused),
     // close the active browser segment — domain tracking is only valid while
     // a browser is in the foreground.
-    let leaving_browser = snapshot
-        .as_ref()
-        .map(|value| !value.is_browser)
-        .unwrap_or(true);
     if leaving_browser {
-        if let Some(previous_browser) = runtime.current_browser.take() {
+        let _browser_transition = state.browser_transition().await;
+        let previous_browser = {
+            let mut runtime = state.runtime().await;
+            runtime.current_browser.take()
+        };
+        if let Some(previous_browser) = previous_browser {
             state
                 .store()
                 .end_browser_segment(previous_browser.id, observed_at)
@@ -154,6 +168,7 @@ async fn sync_focus_snapshot(
             .append_raw_event("focus_changed", &snapshot, observed_at)
             .await?;
 
+        let mut runtime = state.runtime().await;
         runtime.current_focus = Some(OpenFocusSegment {
             id,
             fingerprint: snapshot.fingerprint(),
@@ -169,24 +184,33 @@ async fn sync_presence_state(
     presence: PresenceState,
     observed_at: OffsetDateTime,
 ) -> Result<()> {
-    let mut runtime = state.runtime().await;
+    let (touch_current_id, previous_presence) = {
+        let mut runtime = state.runtime().await;
+        let same_as_current = runtime
+            .current_presence
+            .as_ref()
+            .map(|current| current.state == presence)
+            .unwrap_or(false);
 
-    let same_as_current = runtime
-        .current_presence
-        .as_ref()
-        .map(|current| current.state == presence)
-        .unwrap_or(false);
-    if same_as_current {
-        if let Some(current) = runtime.current_presence.as_ref() {
-            state
-                .store()
-                .touch_presence_segment(current.id, observed_at)
-                .await?;
+        if same_as_current {
+            (
+                runtime.current_presence.as_ref().map(|current| current.id),
+                None,
+            )
+        } else {
+            (None, runtime.current_presence.take())
         }
+    };
+
+    if let Some(current_id) = touch_current_id {
+        state
+            .store()
+            .touch_presence_segment(current_id, observed_at)
+            .await?;
         return Ok(());
     }
 
-    if let Some(previous_presence) = runtime.current_presence.take() {
+    if let Some(previous_presence) = previous_presence {
         state
             .store()
             .end_presence_segment(previous_presence.id, observed_at)
@@ -202,6 +226,7 @@ async fn sync_presence_state(
         .append_raw_event("presence_changed", &presence, observed_at)
         .await?;
 
+    let mut runtime = state.runtime().await;
     runtime.current_presence = Some(OpenPresenceSegment {
         id,
         state: presence,
@@ -284,15 +309,20 @@ pub async fn sync_browser_event(
     observed_at: OffsetDateTime,
 ) -> Result<common::BrowserEventAck> {
     let runtime_config = state.runtime_config_snapshot().await;
-    let mut runtime = state.runtime().await;
     state.mark_browser_online(observed_at).await;
     state
         .store()
         .append_raw_event("browser_event", &payload, observed_at)
         .await?;
 
+    let _browser_transition = state.browser_transition().await;
+
     if is_ignored_domain(&runtime_config, &payload.domain) {
-        if let Some(current) = runtime.current_browser.take() {
+        let current = {
+            let mut runtime = state.runtime().await;
+            runtime.current_browser.take()
+        };
+        if let Some(current) = current {
             state
                 .store()
                 .end_browser_segment(current.id, observed_at)
@@ -305,18 +335,24 @@ pub async fn sync_browser_event(
         });
     }
 
-    let browser_is_foreground = runtime
-        .current_focus
-        .as_ref()
-        .map(|focus| focus.is_browser)
-        .unwrap_or(false)
-        || capture_foreground_window()
-            .ok()
-            .flatten()
-            .map(|snapshot| snapshot.is_browser)
-            .unwrap_or(false);
+    let browser_is_foreground = {
+        let runtime = state.runtime().await;
+        runtime
+            .current_focus
+            .as_ref()
+            .map(|focus| focus.is_browser)
+            .unwrap_or(false)
+    } || capture_foreground_window()
+        .ok()
+        .flatten()
+        .map(|snapshot| snapshot.is_browser)
+        .unwrap_or(false);
     if !browser_is_foreground {
-        if let Some(current) = runtime.current_browser.take() {
+        let current = {
+            let mut runtime = state.runtime().await;
+            runtime.current_browser.take()
+        };
+        if let Some(current) = current {
             state
                 .store()
                 .end_browser_segment(current.id, observed_at)
@@ -329,29 +365,39 @@ pub async fn sync_browser_event(
         });
     }
 
-    let same_segment = runtime.current_browser.as_ref().map(|current| {
-        current.domain == payload.domain
-            && current.browser_window_id == payload.browser_window_id
-            && current.tab_id == payload.tab_id
-    });
-    if same_segment.unwrap_or(false) {
-        if let Some(current) = runtime.current_browser.as_ref() {
+    let browser_transition = {
+        let mut runtime = state.runtime().await;
+        match runtime.current_browser.as_ref() {
+            Some(current)
+                if current.domain == payload.domain
+                    && current.browser_window_id == payload.browser_window_id
+                    && current.tab_id == payload.tab_id =>
+            {
+                BrowserTransition::Touch(current.id)
+            }
+            _ => BrowserTransition::Replace(runtime.current_browser.take()),
+        }
+    };
+
+    match browser_transition {
+        BrowserTransition::Touch(current_id) => {
             state
                 .store()
-                .touch_browser_segment(current.id, observed_at)
+                .touch_browser_segment(current_id, observed_at)
                 .await?;
+            return Ok(common::BrowserEventAck {
+                accepted: true,
+                reason: None,
+            });
         }
-        return Ok(common::BrowserEventAck {
-            accepted: true,
-            reason: None,
-        });
-    }
-
-    if let Some(current) = runtime.current_browser.take() {
-        state
-            .store()
-            .end_browser_segment(current.id, observed_at)
-            .await?;
+        BrowserTransition::Replace(current) => {
+            if let Some(current) = current {
+                state
+                    .store()
+                    .end_browser_segment(current.id, observed_at)
+                    .await?;
+            }
+        }
     }
 
     let payload = common::BrowserEventPayload {
@@ -367,6 +413,7 @@ pub async fn sync_browser_event(
         .store()
         .start_browser_segment(&payload, observed_at)
         .await?;
+    let mut runtime = state.runtime().await;
     runtime.current_browser = Some(OpenBrowserSegment {
         id,
         domain: payload.domain.clone(),
@@ -378,6 +425,11 @@ pub async fn sync_browser_event(
         accepted: true,
         reason: None,
     })
+}
+
+enum BrowserTransition {
+    Touch(i64),
+    Replace(Option<OpenBrowserSegment>),
 }
 
 fn is_ignored_app(runtime_config: &RuntimeConfigSnapshot, process_name: &str) -> bool {

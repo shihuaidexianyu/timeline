@@ -703,9 +703,11 @@ ORDER BY started_at ASC
 
         let month_start_local =
             PrimitiveDateTime::new(first_day, time::Time::MIDNIGHT).assume_offset(timezone);
-        let month_end_local =
-            PrimitiveDateTime::new(first_day + Duration::days(days_in_month), time::Time::MIDNIGHT)
-                .assume_offset(timezone);
+        let month_end_local = PrimitiveDateTime::new(
+            first_day + Duration::days(days_in_month),
+            time::Time::MIDNIGHT,
+        )
+        .assume_offset(timezone);
 
         let month_start_utc = month_start_local.to_offset(UtcOffset::UTC);
         let month_end_utc = month_end_local.to_offset(UtcOffset::UTC);
@@ -827,12 +829,20 @@ ORDER BY started_at ASC
             let top_app = app_buckets
                 .into_iter()
                 .max_by_key(|(_, (_, seconds))| *seconds)
-                .map(|(key, (label, seconds))| KeyedDurationEntry { key, label, seconds });
+                .map(|(key, (label, seconds))| KeyedDurationEntry {
+                    key,
+                    label,
+                    seconds,
+                });
 
             let top_domain = domain_buckets
                 .into_iter()
                 .max_by_key(|(_, (_, seconds))| *seconds)
-                .map(|(key, (label, seconds))| KeyedDurationEntry { key, label, seconds });
+                .map(|(key, (label, seconds))| KeyedDurationEntry {
+                    key,
+                    label,
+                    seconds,
+                });
 
             days.push(DaySummary {
                 date: date.to_string(),

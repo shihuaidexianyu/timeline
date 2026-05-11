@@ -8,14 +8,8 @@ import {
     type DashboardModel,
     type DonutSlice,
 } from '../lib/chart-model'
-
-export type WeekBarDatum = {
-    date: string
-    dayLabel: string
-    activeSeconds: number
-    focusSeconds: number
-    isSelected: boolean
-}
+import type { WeekBarDatum } from '../lib/dashboard-helpers'
+export type { WeekBarDatum } from '../lib/dashboard-helpers'
 
 export function StatsPage(props: {
     dashboard: DashboardModel | null

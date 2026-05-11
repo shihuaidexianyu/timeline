@@ -302,14 +302,26 @@ fn show_break_reminder_toast(title: &str, message: &str) -> Result<()> {
 }
 
 fn show_break_reminder_dialog(title: &str, message: &str) -> Result<()> {
-    show_message_box(title, message, MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST)
+    show_message_box(
+        title,
+        message,
+        MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST,
+    )
 }
 
 pub fn show_startup_error_dialog(title: &str, message: &str) {
-    let _ = show_message_box(title, message, MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST);
+    let _ = show_message_box(
+        title,
+        message,
+        MB_OK | MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST,
+    );
 }
 
-fn show_message_box(title: &str, message: &str, style: windows::Win32::UI::WindowsAndMessaging::MESSAGEBOX_STYLE) -> Result<()> {
+fn show_message_box(
+    title: &str,
+    message: &str,
+    style: windows::Win32::UI::WindowsAndMessaging::MESSAGEBOX_STYLE,
+) -> Result<()> {
     let title = to_wide(title);
     let message = to_wide(message);
     let result = unsafe {
@@ -497,16 +509,7 @@ fn build_fallback_clock_icon() -> Result<Icon> {
         dark,
         SIZE,
     ); // hour hand
-    draw_clock_hand(
-        &mut rgba,
-        center,
-        center,
-        0.0,
-        3.1,
-        1.0,
-        dark,
-        SIZE,
-    ); // top tick
+    draw_clock_hand(&mut rgba, center, center, 0.0, 3.1, 1.0, dark, SIZE); // top tick
     set_pixel(&mut rgba, center as u32, center as u32, dark, SIZE);
 
     Icon::from_rgba(rgba, SIZE, SIZE).context("failed to create fallback tray icon")

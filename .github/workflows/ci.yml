@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  rust:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ensure Rust toolchain is available
+        shell: pwsh
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal
+          rustup default stable-x86_64-pc-windows-msvc
+
+      - name: Check formatting
+        shell: pwsh
+        run: cargo fmt --all -- --check
+
+      - name: Run backend tests
+        shell: pwsh
+        run: cargo test -p timeline
+
+      - name: Run common tests
+        shell: pwsh
+        run: cargo test -p common
+
+  web-ui:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web-ui/package-lock.json
+
+      - name: Install dependencies
+        working-directory: apps/web-ui
+        shell: pwsh
+        run: npm ci
+
+      - name: Build web UI
+        working-directory: apps/web-ui
+        shell: pwsh
+        run: npm run build
+
+      - name: Lint web UI
+        working-directory: apps/web-ui
+        shell: pwsh
+        run: npm run lint
+
+  version-sync:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify version files are synchronized
+        shell: pwsh
+        run: .\scripts\sync-version.ps1 -CheckOnly

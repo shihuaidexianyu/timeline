@@ -3936,12 +3936,84 @@ html[data-theme="dark"] .calendar-cell.is-empty {
 }
 
 html[data-theme="dark"] .calendar-nav-button {
+  border-color: rgba(100, 116, 139, 0.36);
+  background: rgba(22, 28, 39, 0.92);
   color: var(--text-soft);
 }
 
 html[data-theme="dark"] .calendar-nav-button:hover {
   color: var(--text-main);
   background: var(--accent-soft);
+}
+
+html[data-theme="dark"] .donut-card .echarts-for-react {
+  border-color: rgba(100, 116, 139, 0.28);
+  background: rgba(18, 24, 35, 0.46);
+}
+
+html[data-theme="dark"] .donut-center-line-primary {
+  color: var(--text-main);
+}
+
+html[data-theme="dark"] .donut-center-line-secondary,
+html[data-theme="dark"] .donut-center-line-footer {
+  color: var(--text-soft);
+}
+
+html[data-theme="dark"] .donut-card .ranking-row:hover {
+  background: rgba(90, 203, 229, 0.08);
+}
+
+html[data-theme="dark"] .calendar-cell {
+  border-color: rgba(100, 116, 139, 0.22);
+  background: rgba(22, 28, 39, 0.72);
+}
+
+html[data-theme="dark"] .calendar-cell[class*='calendar-heat-'] {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  filter: saturate(1.08);
+}
+
+html[data-theme="dark"] .calendar-heat-0 {
+  background: rgba(22, 28, 39, 0.86);
+}
+
+html[data-theme="dark"] .calendar-heat-0 .calendar-day-number {
+  color: rgba(148, 163, 184, 0.55);
+}
+
+html[data-theme="dark"] .calendar-heat-1 {
+  background: linear-gradient(180deg, rgba(23, 55, 71, 0.98), rgba(17, 38, 49, 0.98));
+}
+
+html[data-theme="dark"] .calendar-heat-2 {
+  background: linear-gradient(180deg, rgba(29, 95, 121, 0.98), rgba(19, 52, 68, 0.98));
+}
+
+html[data-theme="dark"] .calendar-heat-3 {
+  background: linear-gradient(180deg, rgba(42, 149, 187, 0.98), rgba(27, 84, 103, 0.98));
+}
+
+html[data-theme="dark"] .calendar-heat-4 {
+  background: linear-gradient(180deg, rgba(110, 223, 248, 0.98), rgba(58, 182, 212, 0.98));
+}
+
+html[data-theme="dark"] .calendar-selection-summary {
+  border-color: rgba(100, 116, 139, 0.28);
+  background: rgba(22, 28, 39, 0.88);
+}
+
+html[data-theme="dark"] .calendar-selection-summary strong {
+  color: var(--text-main);
+}
+
+html[data-theme="dark"] .calendar-selection-summary span {
+  color: var(--text-soft);
+}
+
+html[data-theme="dark"] .chart-tooltip {
+  border-color: rgba(100, 116, 139, 0.34);
+  background: rgba(22, 28, 39, 0.98);
 }
 
 html[data-theme="dark"] .skeleton-block {

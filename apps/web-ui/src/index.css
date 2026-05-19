@@ -125,10 +125,10 @@ html[data-theme="dark"] {
   --presence-active: #34d399;
   --presence-idle: #768297;
   --presence-locked: #64748b;
-  --calendar-heat-1: #1a3a4a;
-  --calendar-heat-2: #236a82;
-  --calendar-heat-3: #2e9db8;
-  --calendar-heat-4: #7dd8ed;
+  --calendar-heat-1: #173747;
+  --calendar-heat-2: #1d5f79;
+  --calendar-heat-3: #2a95bb;
+  --calendar-heat-4: #6edff8;
   --focus-ring: 0 0 0 3px var(--accent-ring);
   --shadow-color: rgba(0, 0, 0, 0.25);
   --shadow-color-strong: rgba(0, 0, 0, 0.35);

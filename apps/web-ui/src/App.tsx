@@ -31,7 +31,7 @@ import {
 } from './lib/dashboard-helpers'
 import { SettingsPage } from './pages/settings-page'
 import { StatsPage } from './pages/stats-page'
-import { TimelinePage } from './pages/timeline-page'
+import { TimelinePage, type TimelineSegmentKind } from './pages/timeline-page'
 import { useTheme } from './hooks/use-theme'
 
 const PAGE_ITEMS = [
@@ -63,10 +63,13 @@ function App() {
   const [savingConfig, setSavingConfig] = useState(false)
   const [checkingUpdate, setCheckingUpdate] = useState(false)
   const [installingUpdate, setInstallingUpdate] = useState(false)
-  const activeOnly = false
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null)
   const [appFilter, setAppFilter] = useState<DashboardFilter>(null)
   const [domainFilter, setDomainFilter] = useState<DashboardFilter>(null)
+  const [timelineActiveOnly, setTimelineActiveOnly] = useState(false)
+  const [timelineSearchQuery, setTimelineSearchQuery] = useState('')
+  const [timelineSegmentKind, setTimelineSegmentKind] = useState<TimelineSegmentKind>('all')
+  const [focusedSegmentId, setFocusedSegmentId] = useState<string | null>(null)
   const [zoomHours, setZoomHours] = useState<number>(0.5)
   const [viewStartHour, setViewStartHour] = useState(0)
   const [periodSummary, setPeriodSummary] = useState<PeriodSummaryResponse | null>(null)
@@ -261,8 +264,12 @@ function App() {
   }, [agentSettings, page])
 
   const dashboard = useMemo(
-    () => (timeline ? buildDashboardModel(timeline, activeOnly) : null),
-    [activeOnly, timeline],
+    () => (timeline ? buildDashboardModel(timeline, false) : null),
+    [timeline],
+  )
+  const timelineDashboard = useMemo(
+    () => (timeline ? buildDashboardModel(timeline, timelineActiveOnly) : null),
+    [timeline, timelineActiveOnly],
   )
 
   const viewStartSec = viewStartHour * 3600
@@ -329,6 +336,7 @@ function App() {
       setSelectedDate(nextDate)
       setCalendarMonth(monthFromDate(nextDate))
       setDomainFilter(null)
+      setFocusedSegmentId(null)
       setZoomHours(nextWindow.zoomHours)
       setViewStartHour(nextWindow.viewStartHour)
     })
@@ -343,6 +351,7 @@ function App() {
       setCalendarMonth(nextMonth)
       setSelectedDate(nextDate)
       setDomainFilter(null)
+      setFocusedSegmentId(null)
       setZoomHours(nextWindow.zoomHours)
       setViewStartHour(nextWindow.viewStartHour)
     })
@@ -428,14 +437,22 @@ function App() {
 
             {page === 'timeline' ? (
               <TimelinePage
-                dashboard={dashboard}
+                dashboard={timelineDashboard}
                 loading={!hasDashboard}
                 appFilter={appFilter}
                 selectedDate={resolvedSelectedDate}
+                activeOnly={timelineActiveOnly}
+                searchQuery={timelineSearchQuery}
+                segmentKind={timelineSegmentKind}
+                focusedSegmentId={focusedSegmentId}
                 viewStartHour={viewStartHour}
                 viewStartSec={viewStartSec}
                 viewEndSec={viewEndSec}
                 zoomHours={zoomHours}
+                setActiveOnly={setTimelineActiveOnly}
+                setSearchQuery={setTimelineSearchQuery}
+                setSegmentKind={setTimelineSegmentKind}
+                setFocusedSegmentId={setFocusedSegmentId}
                 setZoomHours={setZoomHours}
                 setViewStartHour={setViewStartHour}
               />

@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
 import { TimelineClock } from '../components/timeline-clock'
 import { TimelineChart } from '../components/timeline-chart'
 import {
@@ -23,50 +23,101 @@ import {
   sumOverlappedDuration,
 } from '../lib/dashboard-helpers'
 
+export type TimelineSegmentKind = 'all' | 'app' | 'browser'
+
+const EMPTY_SEGMENTS: ChartSegment[] = []
+const SEGMENT_KIND_OPTIONS: Array<{ key: TimelineSegmentKind; label: string }> = [
+  { key: 'all', label: '全部' },
+  { key: 'app', label: '应用' },
+  { key: 'browser', label: '浏览器' },
+]
+
 export function TimelinePage(props: {
   dashboard: DashboardModel | null
   loading: boolean
   appFilter: DashboardFilter
   selectedDate: string
+  activeOnly: boolean
+  searchQuery: string
+  segmentKind: TimelineSegmentKind
+  focusedSegmentId: string | null
   viewStartHour: number
   viewStartSec: number
   viewEndSec: number
   zoomHours: number
+  setActiveOnly: (activeOnly: boolean) => void
+  setSearchQuery: (query: string) => void
+  setSegmentKind: (kind: TimelineSegmentKind) => void
+  setFocusedSegmentId: (segmentId: string | null) => void
   setZoomHours: (hours: number) => void
   setViewStartHour: (hours: number) => void
 }) {
   const [hoveredFocusSegmentId, setHoveredFocusSegmentId] = useState<string | null>(null)
+  const focusSegments = props.dashboard?.focusSegments ?? EMPTY_SEGMENTS
+  const browserSegments = props.dashboard?.browserSegments ?? EMPTY_SEGMENTS
+  const presenceSegments = props.dashboard?.presenceSegments ?? EMPTY_SEGMENTS
+  const focusedSegmentId = props.focusedSegmentId
+  const setFocusedSegmentId = props.setFocusedSegmentId
+  const normalizedSearchQuery = normalizeSearchQuery(props.searchQuery)
+  const hasSearchOrKindFilter =
+    normalizedSearchQuery.length > 0 || props.segmentKind !== 'all'
+  const hasAnyFilter = hasSearchOrKindFilter || props.activeOnly
+  const browserDomainBySegmentId = useMemo(
+    () => buildPrimaryBrowserDomainMap(focusSegments, browserSegments),
+    [browserSegments, focusSegments],
+  )
+  const filteredFocusSegments = useMemo(
+    () =>
+      focusSegments.filter((segment) =>
+        matchesTimelineFilter(
+          segment,
+          browserDomainBySegmentId.get(segment.id) ?? null,
+          normalizedSearchQuery,
+          props.segmentKind,
+        ),
+      ),
+    [browserDomainBySegmentId, focusSegments, normalizedSearchQuery, props.segmentKind],
+  )
   const visibleFocusItems = useMemo(
     () =>
       buildVisibleFocusItems(
-        props.dashboard?.focusSegments ?? [],
+        filteredFocusSegments,
         props.viewStartSec,
         props.viewEndSec,
       ),
-    [props.dashboard?.focusSegments, props.viewEndSec, props.viewStartSec],
+    [filteredFocusSegments, props.viewEndSec, props.viewStartSec],
   )
-  const browserDomainBySegmentId = useMemo(
-    () => buildPrimaryBrowserDomainMap(visibleFocusItems, props.dashboard?.browserSegments ?? []),
-    [props.dashboard?.browserSegments, visibleFocusItems],
+  const listFocusItems = useMemo(
+    () => sortSegmentsByStart(hasSearchOrKindFilter ? filteredFocusSegments : visibleFocusItems),
+    [filteredFocusSegments, hasSearchOrKindFilter, visibleFocusItems],
   )
   const timelineRows = useMemo(
     () => [
       {
         id: 'focus',
         label: '应用',
-        segments: props.dashboard?.focusSegments ?? [],
+        segments: filteredFocusSegments,
         selectedKey: props.appFilter?.key ?? null,
         splitByKey: false,
       },
       {
         id: 'presence',
         label: '状态',
-        segments: props.dashboard?.presenceSegments ?? [],
+        segments: presenceSegments,
         includeInTable: false,
       },
     ],
-    [props.appFilter, props.dashboard?.focusSegments, props.dashboard?.presenceSegments],
+    [filteredFocusSegments, presenceSegments, props.appFilter],
   )
+
+  useEffect(() => {
+    if (
+      focusedSegmentId !== null &&
+      !filteredFocusSegments.some((segment) => segment.id === focusedSegmentId)
+    ) {
+      setFocusedSegmentId(null)
+    }
+  }, [filteredFocusSegments, focusedSegmentId, setFocusedSegmentId])
   const windowDurationSec = props.viewEndSec - props.viewStartSec
   const visibleAppCount = useMemo(
     () => new Set(visibleFocusItems.map((item) => item.key)).size,
@@ -75,20 +126,20 @@ export function TimelinePage(props: {
   const focusDurationSec = useMemo(
     () =>
       sumOverlappedDuration(
-        props.dashboard?.focusSegments ?? [],
+        filteredFocusSegments,
         props.viewStartSec,
         props.viewEndSec,
       ),
-    [props.dashboard?.focusSegments, props.viewEndSec, props.viewStartSec],
+    [filteredFocusSegments, props.viewEndSec, props.viewStartSec],
   )
   const activeDurationSec = useMemo(
     () =>
       sumOverlappedDuration(
-        (props.dashboard?.presenceSegments ?? []).filter((segment) => segment.key === 'active'),
+        presenceSegments.filter((segment) => segment.key === 'active'),
         props.viewStartSec,
         props.viewEndSec,
       ),
-    [props.dashboard?.presenceSegments, props.viewEndSec, props.viewStartSec],
+    [presenceSegments, props.viewEndSec, props.viewStartSec],
   )
   const longestVisibleDurationSec = useMemo(
     () =>
@@ -107,6 +158,24 @@ export function TimelinePage(props: {
     props.viewStartHour + props.zoomHours,
   )}`
 
+  function clearTimelineFilters() {
+    props.setSearchQuery('')
+    props.setSegmentKind('all')
+    props.setActiveOnly(false)
+    props.setFocusedSegmentId(null)
+  }
+
+  function focusSegment(segment: ChartSegment) {
+    props.setFocusedSegmentId(segment.id)
+
+    if (!hasSearchOrKindFilter) {
+      return
+    }
+
+    const segmentCenterHour = ((segment.startSec + segment.endSec) / 2) / 3600
+    props.setViewStartHour(clampViewStart(segmentCenterHour - props.zoomHours / 2, props.zoomHours))
+  }
+
   return (
     <section className="page-stack">
       <div className="page-content-layout timeline-page-layout">
@@ -115,6 +184,70 @@ export function TimelinePage(props: {
             <div className="panel-header">
               <div>
                 <h2>事件时间线</h2>
+              </div>
+            </div>
+
+            <div className="timeline-control-bar">
+              <label className="timeline-control-group timeline-control-group-search">
+                <span className="timeline-control-label">搜索</span>
+                <input
+                  type="search"
+                  className="timeline-control-search"
+                  placeholder="应用、标题、域名"
+                  value={props.searchQuery}
+                  disabled={props.loading}
+                  onChange={(event) => {
+                    props.setSearchQuery(event.target.value)
+                  }}
+                />
+              </label>
+
+              <div className="timeline-control-group" role="group" aria-label="片段类型筛选">
+                <span className="timeline-control-label">类型</span>
+                {SEGMENT_KIND_OPTIONS.map((option) => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    className={`timeline-control-button ${props.segmentKind === option.key ? 'is-active' : ''}`}
+                    aria-pressed={props.segmentKind === option.key}
+                    disabled={props.loading}
+                    onClick={() => {
+                      props.setSegmentKind(option.key)
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="timeline-control-group">
+                <button
+                  type="button"
+                  className={`timeline-control-button ${props.activeOnly ? 'is-active' : ''}`}
+                  aria-pressed={props.activeOnly}
+                  disabled={props.loading}
+                  onClick={() => {
+                    props.setActiveOnly(!props.activeOnly)
+                  }}
+                >
+                  仅活跃时段
+                </button>
+              </div>
+
+              <div className="timeline-control-group timeline-control-group-anchor">
+                <span className="timeline-control-hint">
+                  {hasSearchOrKindFilter
+                    ? `匹配 ${listFocusItems.length}`
+                    : `窗口 ${visibleFocusItems.length}`}
+                </span>
+                <button
+                  type="button"
+                  className="timeline-control-button"
+                  disabled={props.loading || !hasAnyFilter}
+                  onClick={clearTimelineFilters}
+                >
+                  清空筛选
+                </button>
               </div>
             </div>
 
@@ -128,7 +261,7 @@ export function TimelinePage(props: {
                 windowLabel={windowLabel}
                 windowDurationLabel={`窗口 ${formatDuration(windowDurationSec)}`}
                 windowItemCount={visibleFocusItems.length}
-                highlightedSegmentId={hoveredFocusSegmentId}
+                highlightedSegmentId={hoveredFocusSegmentId ?? props.focusedSegmentId}
                 interactiveZoom={false}
                 minViewHours={MIN_ZOOM_HOURS}
                 maxViewHours={MAX_ZOOM_HOURS}
@@ -146,8 +279,8 @@ export function TimelinePage(props: {
 
             <TimelineClock
               loading={props.loading}
-              focusSegments={props.dashboard?.focusSegments ?? []}
-              presenceSegments={props.dashboard?.presenceSegments ?? []}
+              focusSegments={filteredFocusSegments}
+              presenceSegments={presenceSegments}
               viewStartSec={props.viewStartSec}
               viewEndSec={props.viewEndSec}
               minViewSec={MIN_ZOOM_HOURS * 3600}
@@ -251,20 +384,24 @@ export function TimelinePage(props: {
                     <span className="skeleton-block skeleton-inline skeleton-meta-pill" />
                   </span>
                 ) : (
-                  <span className="timeline-meta-pill">窗口内 {visibleFocusItems.length}</span>
+                  <span className="timeline-meta-pill">
+                    {hasSearchOrKindFilter
+                      ? `匹配 ${listFocusItems.length}`
+                      : `窗口内 ${visibleFocusItems.length}`}
+                  </span>
                 )}
               </div>
             </div>
 
             <div className="detail-list-section">
               <div className="detail-list-meta">
-                <span>当前窗口</span>
+                <span>{hasSearchOrKindFilter ? '匹配结果' : '当前窗口'}</span>
                 {props.loading ? (
                   <strong>
                     <span className="skeleton-block skeleton-inline skeleton-detail-count" />
                   </strong>
                 ) : (
-                  <strong>{visibleFocusItems.length}</strong>
+                  <strong>{hasSearchOrKindFilter ? listFocusItems.length : visibleFocusItems.length}</strong>
                 )}
               </div>
               <div className="detail-segment-scroll">
@@ -272,10 +409,13 @@ export function TimelinePage(props: {
                   <DetailListSkeleton />
                 ) : (
                   <FocusSegmentList
-                    segments={visibleFocusItems}
+                    segments={listFocusItems}
                     browserDomainBySegmentId={browserDomainBySegmentId}
                     hoveredSegmentId={hoveredFocusSegmentId}
+                    focusedSegmentId={props.focusedSegmentId}
                     onHoverSegment={setHoveredFocusSegmentId}
+                    onSelectSegment={focusSegment}
+                    emptyLabel={hasSearchOrKindFilter ? '没有匹配片段' : '暂无记录'}
                   />
                 )}
               </div>
@@ -291,43 +431,99 @@ const FocusSegmentList = memo(function FocusSegmentList(props: {
   segments: ChartSegment[]
   browserDomainBySegmentId: Map<string, string>
   hoveredSegmentId: string | null
+  focusedSegmentId: string | null
   onHoverSegment: (segmentId: string | null) => void
+  onSelectSegment: (segment: ChartSegment) => void
+  emptyLabel: string
 }) {
   if (props.segments.length === 0) {
-    return <div className="empty-card">暂无记录</div>
+    return <div className="empty-card">{props.emptyLabel}</div>
   }
 
   return (
     <div className="detail-segment-list">
       {props.segments.map((segment) => {
+        const segmentDomain = props.browserDomainBySegmentId.get(segment.id) ?? null
         return (
-          <article
+          <button
             key={segment.id}
-            className={`detail-segment-item ${props.hoveredSegmentId === segment.id ? 'is-hovered' : ''}`}
-            title={`${segment.label}\n${formatClockRange(segment.startSec, segment.endSec)}`}
+            type="button"
+            className={`detail-segment-item ${
+              props.hoveredSegmentId === segment.id ? 'is-hovered' : ''
+            } ${props.focusedSegmentId === segment.id ? 'is-focused' : ''}`}
+            title={[
+              segment.label,
+              segmentDomain ?? segment.detail,
+              formatClockRange(segment.startSec, segment.endSec),
+            ]
+              .filter((value): value is string => Boolean(value))
+              .join('\n')}
             onMouseEnter={() => props.onHoverSegment(segment.id)}
             onMouseLeave={() => props.onHoverSegment(null)}
+            onFocus={() => props.onHoverSegment(segment.id)}
+            onBlur={() => props.onHoverSegment(null)}
+            onClick={() => props.onSelectSegment(segment)}
           >
             <span className="detail-segment-row">
               <span className="detail-segment-name">
                 <i style={{ backgroundColor: segment.color }} />
                 {segment.label}
               </span>
-              {segment.isBrowser ? (
+              {segment.isBrowser && segmentDomain ? (
                 <span className="detail-segment-domain">
-                  {props.browserDomainBySegmentId.get(segment.id) ?? ''}
+                  {segmentDomain}
                 </span>
               ) : null}
             </span>
             <span className="detail-segment-time">
               {formatClockRange(segment.startSec, segment.endSec)}
             </span>
-          </article>
+          </button>
         )
       })}
     </div>
   )
 })
+
+function matchesTimelineFilter(
+  segment: ChartSegment,
+  domain: string | null,
+  normalizedSearchQuery: string,
+  segmentKind: TimelineSegmentKind,
+) {
+  if (segmentKind === 'app' && segment.isBrowser) {
+    return false
+  }
+
+  if (segmentKind === 'browser' && !segment.isBrowser) {
+    return false
+  }
+
+  if (!normalizedSearchQuery) {
+    return true
+  }
+
+  return [
+    segment.label,
+    segment.key,
+    segment.detail,
+    domain,
+  ].some((value) => normalizeSearchQuery(value).includes(normalizedSearchQuery))
+}
+
+function normalizeSearchQuery(value: string | null | undefined) {
+  return (value ?? '').trim().toLocaleLowerCase()
+}
+
+function sortSegmentsByStart(segments: ChartSegment[]) {
+  return [...segments].sort((left, right) => {
+    if (left.startSec !== right.startSec) {
+      return left.startSec - right.startSec
+    }
+
+    return right.durationSec - left.durationSec
+  })
+}
 
 function DetailListSkeleton() {
   return (

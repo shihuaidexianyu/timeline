@@ -1,0 +1,17 @@
+:root {
+  --surface-panel: var(--panel-bg);
+  --surface-panel-solid: var(--panel-bg-solid);
+  --surface-input: var(--input-bg);
+  --text-primary: var(--text-main);
+  --text-muted: var(--text-soft);
+  --text-subtle: var(--text-dim);
+  --border-subtle: var(--panel-border);
+  --border-input: var(--input-border);
+  --accent-primary: var(--accent-color);
+  --accent-primary-strong: var(--accent-color-strong);
+  --accent-primary-text: var(--accent-text);
+  --chart-grid: var(--lane-border);
+  --chart-presence-active: var(--presence-active);
+  --chart-presence-idle: var(--presence-idle);
+  --chart-presence-locked: var(--presence-locked);
+}

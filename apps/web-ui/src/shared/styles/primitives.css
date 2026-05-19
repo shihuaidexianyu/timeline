@@ -1,0 +1,137 @@
+.refresh-badge {
+  display: inline-flex;
+  align-items: center;
+  min-width: 4.25rem;
+  min-height: 1.5rem;
+  justify-content: flex-end;
+  color: var(--text-subtle);
+  font-size: 0.76rem;
+  font-weight: 600;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease;
+}
+
+.refresh-badge.is-active {
+  opacity: 1;
+}
+
+.refresh-badge.is-active::before {
+  width: 0.45rem;
+  height: 0.45rem;
+  margin-right: 0.42rem;
+  border-radius: 999px;
+  background: var(--accent-primary);
+  box-shadow: 0 0 0 0 var(--accent-ring);
+  content: "";
+  animation: refresh-pulse 1.2s ease-out infinite;
+}
+
+.ui-button,
+.ui-segmented button,
+.ui-switch {
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.5rem;
+  background: var(--surface-input);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.ui-button {
+  min-height: 2.25rem;
+  padding: 0 0.9rem;
+  font-weight: 650;
+}
+
+.ui-button-primary {
+  border-color: var(--accent-border);
+  background: var(--accent-soft-strong);
+  color: var(--accent-primary-text);
+}
+
+.ui-button-ghost {
+  background: transparent;
+}
+
+.ui-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: center;
+}
+
+.ui-field {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+.ui-field-label {
+  font-weight: 650;
+}
+
+.ui-input {
+  min-height: 2.25rem;
+  border: 1px solid var(--border-input);
+  border-radius: 0.5rem;
+  background: var(--surface-input);
+  color: var(--text-primary);
+  padding: 0 0.75rem;
+}
+
+.ui-segmented {
+  display: inline-flex;
+  gap: 0.2rem;
+  padding: 0.2rem;
+  border-radius: 0.6rem;
+  background: color-mix(in srgb, var(--surface-input), transparent 15%);
+}
+
+.ui-segmented button {
+  min-height: 1.9rem;
+  padding: 0 0.7rem;
+}
+
+.ui-segmented button.is-active,
+.ui-switch.is-active {
+  border-color: var(--accent-border);
+  background: var(--accent-soft-strong);
+  color: var(--accent-primary-text);
+}
+
+.ui-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.1rem;
+  padding: 0 0.7rem;
+  font-weight: 650;
+}
+
+.ui-switch-track {
+  width: 2rem;
+  height: 1.05rem;
+  border-radius: 999px;
+  background: var(--text-subtle);
+  padding: 0.12rem;
+}
+
+.ui-switch-thumb {
+  display: block;
+  width: 0.81rem;
+  height: 0.81rem;
+  border-radius: 999px;
+  background: var(--surface-panel-solid);
+  transition: transform 160ms ease;
+}
+
+.ui-switch.is-active .ui-switch-thumb {
+  transform: translateX(0.9rem);
+}
+
+@keyframes refresh-pulse {
+  100% {
+    box-shadow: 0 0 0 0.45rem transparent;
+  }
+}

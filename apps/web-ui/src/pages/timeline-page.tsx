@@ -2,6 +2,12 @@ import { memo, useEffect, useMemo, useState } from 'react'
 import { TimelineClock } from '../components/timeline-clock'
 import { TimelineChart } from '../components/timeline-chart'
 import {
+  filterTimelineFocusSegments,
+  normalizeTimelineSearchQuery,
+  sortSegmentsByStart,
+  type TimelineSegmentKind,
+} from '../features/timeline/timeline-selectors'
+import {
   formatClockRange,
   formatDuration,
   type ChartSegment,
@@ -23,7 +29,7 @@ import {
   sumOverlappedDuration,
 } from '../lib/dashboard-helpers'
 
-export type TimelineSegmentKind = 'all' | 'app' | 'browser'
+export type { TimelineSegmentKind } from '../features/timeline/timeline-selectors'
 
 const EMPTY_SEGMENTS: ChartSegment[] = []
 const SEGMENT_KIND_OPTIONS: Array<{ key: TimelineSegmentKind; label: string }> = [
@@ -58,7 +64,7 @@ export function TimelinePage(props: {
   const presenceSegments = props.dashboard?.presenceSegments ?? EMPTY_SEGMENTS
   const focusedSegmentId = props.focusedSegmentId
   const setFocusedSegmentId = props.setFocusedSegmentId
-  const normalizedSearchQuery = normalizeSearchQuery(props.searchQuery)
+  const normalizedSearchQuery = normalizeTimelineSearchQuery(props.searchQuery)
   const hasSearchOrKindFilter =
     normalizedSearchQuery.length > 0 || props.segmentKind !== 'all'
   const hasAnyFilter = hasSearchOrKindFilter || props.activeOnly
@@ -68,13 +74,11 @@ export function TimelinePage(props: {
   )
   const filteredFocusSegments = useMemo(
     () =>
-      focusSegments.filter((segment) =>
-        matchesTimelineFilter(
-          segment,
-          browserDomainBySegmentId.get(segment.id) ?? null,
-          normalizedSearchQuery,
-          props.segmentKind,
-        ),
+      filterTimelineFocusSegments(
+        focusSegments,
+        browserDomainBySegmentId,
+        normalizedSearchQuery,
+        props.segmentKind,
       ),
     [browserDomainBySegmentId, focusSegments, normalizedSearchQuery, props.segmentKind],
   )
@@ -484,46 +488,6 @@ const FocusSegmentList = memo(function FocusSegmentList(props: {
     </div>
   )
 })
-
-function matchesTimelineFilter(
-  segment: ChartSegment,
-  domain: string | null,
-  normalizedSearchQuery: string,
-  segmentKind: TimelineSegmentKind,
-) {
-  if (segmentKind === 'app' && segment.isBrowser) {
-    return false
-  }
-
-  if (segmentKind === 'browser' && !segment.isBrowser) {
-    return false
-  }
-
-  if (!normalizedSearchQuery) {
-    return true
-  }
-
-  return [
-    segment.label,
-    segment.key,
-    segment.detail,
-    domain,
-  ].some((value) => normalizeSearchQuery(value).includes(normalizedSearchQuery))
-}
-
-function normalizeSearchQuery(value: string | null | undefined) {
-  return (value ?? '').trim().toLocaleLowerCase()
-}
-
-function sortSegmentsByStart(segments: ChartSegment[]) {
-  return [...segments].sort((left, right) => {
-    if (left.startSec !== right.startSec) {
-      return left.startSec - right.startSec
-    }
-
-    return right.durationSec - left.durationSec
-  })
-}
 
 function DetailListSkeleton() {
   return (

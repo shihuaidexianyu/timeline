@@ -1,12 +1,18 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   API_BASE_URL,
   type AgentSettingsResponse,
   type AppUpdateInfo,
   type UpdateAgentConfigRequest,
 } from '../api'
+import {
+  formValuesToUpdatePayload,
+  settingsFormKey,
+  settingsToFormValues,
+  type SettingsFormValues,
+} from '../features/settings/settings-form'
 import type { ThemeMode } from '../hooks/use-theme'
-import { clampNumber, parseConfigList } from '../lib/dashboard-helpers'
+import { RefreshBadge } from '../shared/ui'
 
 export function SettingsPage(props: {
   agentSettings: AgentSettingsResponse | null
@@ -32,69 +38,6 @@ export function SettingsPage(props: {
   onCheckUpdate: () => Promise<void>
   onInstallUpdate: () => Promise<void>
 }) {
-  const [idleThresholdSecs, setIdleThresholdSecs] = useState(60)
-  const [pollIntervalMillis, setPollIntervalMillis] = useState(1000)
-  const [healthReminderEnabled, setHealthReminderEnabled] = useState(true)
-  const [healthReminderThresholdSecs, setHealthReminderThresholdSecs] = useState(3000)
-  const [recordWindowTitles, setRecordWindowTitles] = useState(true)
-  const [recordPageTitles, setRecordPageTitles] = useState(true)
-  const [ignoredAppsText, setIgnoredAppsText] = useState('')
-  const [ignoredDomainsText, setIgnoredDomainsText] = useState('')
-
-  useEffect(() => {
-    if (!props.agentSettings) {
-      return
-    }
-
-    // Keep the editable local form in sync when async settings arrive from the agent.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setIdleThresholdSecs(
-      Number.isFinite(props.agentSettings.idle_threshold_secs)
-        ? props.agentSettings.idle_threshold_secs
-        : 300,
-    )
-    setPollIntervalMillis(
-      Number.isFinite(props.agentSettings.poll_interval_millis)
-        ? props.agentSettings.poll_interval_millis
-        : 1000,
-    )
-    setHealthReminderEnabled(Boolean(props.agentSettings.health_reminder_enabled))
-    setHealthReminderThresholdSecs(
-      Number.isFinite(props.agentSettings.health_reminder_threshold_secs)
-        ? props.agentSettings.health_reminder_threshold_secs
-        : 3000,
-    )
-    setRecordWindowTitles(Boolean(props.agentSettings.record_window_titles))
-    setRecordPageTitles(Boolean(props.agentSettings.record_page_titles))
-    setIgnoredAppsText(
-      Array.isArray(props.agentSettings.ignored_apps)
-        ? props.agentSettings.ignored_apps.join('\n')
-        : '',
-    )
-    setIgnoredDomainsText(
-      Array.isArray(props.agentSettings.ignored_domains)
-        ? props.agentSettings.ignored_domains.join('\n')
-        : '',
-    )
-  }, [props.agentSettings])
-
-  async function handleSaveConfig() {
-    await props.onUpdateConfig({
-      idle_threshold_secs: clampNumber(Math.round(idleThresholdSecs), 15, 1800),
-      poll_interval_millis: clampNumber(Math.round(pollIntervalMillis), 250, 5000),
-      health_reminder_enabled: healthReminderEnabled,
-      health_reminder_threshold_secs: clampNumber(
-        Math.round(healthReminderThresholdSecs),
-        300,
-        21600,
-      ),
-      record_window_titles: recordWindowTitles,
-      record_page_titles: recordPageTitles,
-      ignored_apps: parseConfigList(ignoredAppsText),
-      ignored_domains: parseConfigList(ignoredDomainsText),
-    })
-  }
-
   return (
     <section className="page-stack">
       <div className="page-content-layout">
@@ -299,130 +242,15 @@ export function SettingsPage(props: {
               )}
             </dl>
 
-            {props.loading ? (
+            {props.loading || !props.agentSettings ? (
               <SettingsConfigSkeleton />
             ) : (
-              <div className="settings-config-grid" role="group" aria-label="采集、提醒与过滤设置">
-                <label className="settings-config-field">
-                  <span>空闲阈值（秒）</span>
-                  <input
-                    type="number"
-                    min={15}
-                    max={1800}
-                    step={5}
-                    value={idleThresholdSecs}
-                    onChange={(event) => setIdleThresholdSecs(Number(event.target.value) || 0)}
-                  />
-                  <small className="settings-config-help">
-                    超过该时长无键盘/鼠标输入将判定为 Idle，建议 60~120 秒。
-                  </small>
-                </label>
-
-                <label className="settings-config-field">
-                  <span>轮询间隔（毫秒）</span>
-                  <input
-                    type="number"
-                    min={250}
-                    max={5000}
-                    step={50}
-                    value={pollIntervalMillis}
-                    onChange={(event) => setPollIntervalMillis(Number(event.target.value) || 0)}
-                  />
-                  <small className="settings-config-help">
-                    越小越实时但资源占用更高；建议保持 500~1500 毫秒。
-                  </small>
-                </label>
-
-                <label className="settings-config-check">
-                  <input
-                    type="checkbox"
-                    checked={healthReminderEnabled}
-                    onChange={(event) => setHealthReminderEnabled(event.target.checked)}
-                  />
-                  <span>
-                    健康休息提醒
-                    <small>连续活跃超过阈值后发送系统提醒，建议保持开启。</small>
-                  </span>
-                </label>
-
-                <label className="settings-config-field">
-                  <span>休息提醒阈值（秒）</span>
-                  <input
-                    type="number"
-                    min={300}
-                    max={21600}
-                    step={60}
-                    value={healthReminderThresholdSecs}
-                    disabled={!healthReminderEnabled}
-                    onChange={(event) =>
-                      setHealthReminderThresholdSecs(Number(event.target.value) || 0)}
-                  />
-                  <small className="settings-config-help">
-                    默认 3000 秒（50 分钟），进入 Idle/Locked 后会重新计时。
-                  </small>
-                </label>
-
-                <label className="settings-config-check">
-                  <input
-                    type="checkbox"
-                    checked={recordWindowTitles}
-                    onChange={(event) => setRecordWindowTitles(event.target.checked)}
-                  />
-                  <span>
-                    记录窗口标题
-                    <small>用于更细粒度窗口识别，关闭可减少隐私暴露。</small>
-                  </span>
-                </label>
-
-                <label className="settings-config-check">
-                  <input
-                    type="checkbox"
-                    checked={recordPageTitles}
-                    onChange={(event) => setRecordPageTitles(event.target.checked)}
-                  />
-                  <span>
-                    记录页面标题
-                    <small>浏览器页面将保留标题，关闭后仅记录域名。</small>
-                  </span>
-                </label>
-
-                <label className="settings-config-field is-wide">
-                  <span>忽略应用（每行一个，如 chrome.exe）</span>
-                  <textarea
-                    rows={4}
-                    value={ignoredAppsText}
-                    onChange={(event) => setIgnoredAppsText(event.target.value)}
-                  />
-                  <small className="settings-config-help">
-                    命中列表的应用将不写入焦点记录，支持换行或逗号分隔。
-                  </small>
-                </label>
-
-                <label className="settings-config-field is-wide">
-                  <span>忽略域名（每行一个，如 example.com）</span>
-                  <textarea
-                    rows={4}
-                    value={ignoredDomainsText}
-                    onChange={(event) => setIgnoredDomainsText(event.target.value)}
-                  />
-                  <small className="settings-config-help">
-                    命中列表的域名不会进入浏览器记录，适合排除隐私或噪声站点。
-                  </small>
-                </label>
-
-                <div className="settings-config-actions">
-                  <button
-                    type="button"
-                    className="settings-save-button"
-                    disabled={props.savingConfig}
-                    onClick={() => {
-                      void handleSaveConfig()
-                    }}
-                  >
-                    {props.savingConfig ? '保存中…' : '保存采集配置'}
-                  </button>
-                </div>
-              </div>
+              <SettingsConfigForm
+                key={settingsFormKey(props.agentSettings)}
+                settings={props.agentSettings}
+                savingConfig={props.savingConfig}
+                onUpdateConfig={props.onUpdateConfig}
+              />
             )}
 
             {!props.loading && props.settingsError ? <div className="settings-error">{props.settingsError}</div> : null}
@@ -459,9 +287,149 @@ export function SettingsPage(props: {
   )
 }
 
-function RefreshBadge(props: { active: boolean }) {
-  void props
-  return null
+function SettingsConfigForm(props: {
+  settings: AgentSettingsResponse
+  savingConfig: boolean
+  onUpdateConfig: (payload: UpdateAgentConfigRequest) => Promise<void>
+}) {
+  const [values, setValues] = useState<SettingsFormValues>(() =>
+    settingsToFormValues(props.settings),
+  )
+
+  function patchValues(patch: Partial<SettingsFormValues>) {
+    setValues((current) => ({ ...current, ...patch }))
+  }
+
+  async function handleSaveConfig() {
+    await props.onUpdateConfig(formValuesToUpdatePayload(values))
+  }
+
+  return (
+    <div className="settings-config-grid" role="group" aria-label="采集、提醒与过滤设置">
+      <label className="settings-config-field">
+        <span>空闲阈值（秒）</span>
+        <input
+          type="number"
+          min={15}
+          max={1800}
+          step={5}
+          value={values.idleThresholdSecs}
+          onChange={(event) =>
+            patchValues({ idleThresholdSecs: Number(event.target.value) || 0 })}
+        />
+        <small className="settings-config-help">
+          超过该时长无键盘/鼠标输入将判定为 Idle，建议 60~120 秒。
+        </small>
+      </label>
+
+      <label className="settings-config-field">
+        <span>轮询间隔（毫秒）</span>
+        <input
+          type="number"
+          min={250}
+          max={5000}
+          step={50}
+          value={values.pollIntervalMillis}
+          onChange={(event) =>
+            patchValues({ pollIntervalMillis: Number(event.target.value) || 0 })}
+        />
+        <small className="settings-config-help">
+          越小越实时但资源占用更高；建议保持 500~1500 毫秒。
+        </small>
+      </label>
+
+      <label className="settings-config-check">
+        <input
+          type="checkbox"
+          checked={values.healthReminderEnabled}
+          onChange={(event) =>
+            patchValues({ healthReminderEnabled: event.target.checked })}
+        />
+        <span>
+          健康休息提醒
+          <small>连续活跃超过阈值后发送系统提醒，建议保持开启。</small>
+        </span>
+      </label>
+
+      <label className="settings-config-field">
+        <span>休息提醒阈值（秒）</span>
+        <input
+          type="number"
+          min={300}
+          max={21600}
+          step={60}
+          value={values.healthReminderThresholdSecs}
+          disabled={!values.healthReminderEnabled}
+          onChange={(event) =>
+            patchValues({ healthReminderThresholdSecs: Number(event.target.value) || 0 })}
+        />
+        <small className="settings-config-help">
+          默认 3000 秒（50 分钟），进入 Idle/Locked 后会重新计时。
+        </small>
+      </label>
+
+      <label className="settings-config-check">
+        <input
+          type="checkbox"
+          checked={values.recordWindowTitles}
+          onChange={(event) => patchValues({ recordWindowTitles: event.target.checked })}
+        />
+        <span>
+          记录窗口标题
+          <small>用于更细粒度窗口识别，关闭可减少隐私暴露。</small>
+        </span>
+      </label>
+
+      <label className="settings-config-check">
+        <input
+          type="checkbox"
+          checked={values.recordPageTitles}
+          onChange={(event) => patchValues({ recordPageTitles: event.target.checked })}
+        />
+        <span>
+          记录页面标题
+          <small>浏览器页面将保留标题，关闭后仅记录域名。</small>
+        </span>
+      </label>
+
+      <label className="settings-config-field is-wide">
+        <span>忽略应用（每行一个，如 chrome.exe）</span>
+        <textarea
+          rows={4}
+          value={values.ignoredAppsText}
+          onChange={(event) => patchValues({ ignoredAppsText: event.target.value })}
+        />
+        <small className="settings-config-help">
+          命中列表的应用将不写入焦点记录，支持换行或逗号分隔。
+        </small>
+      </label>
+
+      <label className="settings-config-field is-wide">
+        <span>忽略域名（每行一个，如 example.com）</span>
+        <textarea
+          rows={4}
+          value={values.ignoredDomainsText}
+          onChange={(event) => patchValues({ ignoredDomainsText: event.target.value })}
+        />
+        <small className="settings-config-help">
+          命中列表的域名不会进入浏览器记录，适合排除隐私或噪声站点。
+        </small>
+      </label>
+
+      <div className="settings-config-actions">
+        <button
+          type="button"
+          className="settings-save-button"
+          disabled={props.savingConfig}
+          onClick={() => {
+            void handleSaveConfig()
+          }}
+        >
+          {props.savingConfig ? '保存中…' : '保存采集配置'}
+        </button>
+      </div>
+    </div>
+  )
 }
 
 function SettingsListSkeleton(props: { rows: number }) {

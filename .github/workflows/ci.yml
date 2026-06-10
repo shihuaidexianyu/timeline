@@ -61,13 +61,3 @@ jobs:
         shell: pwsh
         run: npm run lint
 
-  version-sync:
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Verify version files are synchronized
-        shell: pwsh
-        run: .\scripts\sync-version.ps1 -CheckOnly

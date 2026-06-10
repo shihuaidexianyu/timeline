@@ -1,10 +1,10 @@
 //! Axum routes for health checks, timelines, stats, browser event ingestion, and settings.
 
-use crate::{state::AgentState, system, trackers::sync_browser_event, updater};
+use crate::{state::AgentState, system, trackers::sync_browser_event};
 use anyhow::Result;
 use axum::extract::{Query, Request, State};
-use axum::http::header::{CONTENT_TYPE, ORIGIN};
-use axum::http::{HeaderValue, Method, StatusCode};
+use axum::http::header::{CONTENT_TYPE, HeaderName, ORIGIN};
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::{
@@ -12,10 +12,9 @@ use axum::{
     routing::{get, post},
 };
 use common::{
-    AgentMonitorStatus, AgentSettingsResponse, ApiResponse, AppUpdateInfo, BrowserEventPayload,
-    HealthResponse, InstallUpdateResponse, MonthCalendarResponse, PeriodSummaryResponse,
-    UpdateAgentConfigRequest, UpdateAgentConfigResponse, UpdateAutostartRequest,
-    UpdateAutostartResponse,
+    AgentMonitorStatus, AgentSettingsResponse, ApiResponse, BrowserEventPayload, HealthResponse,
+    MonthCalendarResponse, PeriodSummaryResponse, UpdateAgentConfigRequest,
+    UpdateAgentConfigResponse, UpdateAutostartRequest, UpdateAutostartResponse,
 };
 use serde::Deserialize;
 use time::format_description::parse;
@@ -38,8 +37,6 @@ pub fn build_router(state: AgentState) -> Router {
         .route("/api/settings", get(get_settings))
         .route("/api/settings/autostart", post(post_autostart))
         .route("/api/settings/config", post(post_update_agent_config))
-        .route("/api/update/check", get(get_update_info))
-        .route("/api/update/install", post(post_install_update))
         .route("/api/debug/recent-events", get(get_recent_events))
         .route("/api/events/browser", post(post_browser_event))
         .route("/api/calendar/month", get(get_month_calendar))
@@ -70,7 +67,6 @@ async fn get_health(
 ) -> Result<Json<ApiResponse<HealthResponse>>, AppError> {
     Ok(Json(ApiResponse::ok(HealthResponse {
         service: "timeline".to_string(),
-        version: env!("CARGO_PKG_VERSION").to_string(),
         status: "ok".to_string(),
         started_at: state.started_at(),
         database_path: state.config().database_path.display().to_string(),
@@ -142,7 +138,6 @@ async fn get_settings(
     let monitors = build_monitor_statuses(&state).await;
 
     Ok(Json(ApiResponse::ok(AgentSettingsResponse {
-        app_version: env!("CARGO_PKG_VERSION").to_string(),
         autostart_enabled,
         tray_enabled: state.config().tray_enabled,
         web_ui_url: state.config().effective_web_ui_url(),
@@ -157,29 +152,6 @@ async fn get_settings(
         ignored_domains: runtime_config.ignored_domains,
         monitors,
     })))
-}
-
-async fn get_update_info() -> Result<Json<ApiResponse<AppUpdateInfo>>, AppError> {
-    Ok(Json(ApiResponse::ok(
-        updater::check_for_updates()
-            .await
-            .map_err(AppError::internal)?,
-    )))
-}
-
-async fn post_install_update(
-    State(state): State<AgentState>,
-) -> Result<Json<ApiResponse<InstallUpdateResponse>>, AppError> {
-    let response = updater::install_latest_update(&state)
-        .await
-        .map_err(AppError::internal)?;
-    let state_for_shutdown = state.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(350)).await;
-        state_for_shutdown.request_shutdown();
-    });
-
-    Ok(Json(ApiResponse::ok(response)))
 }
 
 async fn post_autostart(
@@ -227,8 +199,16 @@ async fn post_update_agent_config(
 
 async fn post_browser_event(
     State(state): State<AgentState>,
+    headers: HeaderMap,
     Json(payload): Json<BrowserEventPayload>,
 ) -> Result<Json<ApiResponse<common::BrowserEventAck>>, AppError> {
+    if !has_extension_header(&headers) {
+        return Err(AppError::forbidden(
+            "missing_extension_header",
+            "browser events must be sent by the timeline browser extension",
+        ));
+    }
+
     let observed_at = payload.observed_at.unwrap_or_else(OffsetDateTime::now_utc);
     let ack = sync_browser_event(&state, payload, observed_at).await?;
     Ok(Json(ApiResponse::ok(ack)))
@@ -310,7 +290,7 @@ fn build_cors_layer() -> CorsLayer {
             is_allowed_loopback_origin(origin)
         }))
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-        .allow_headers([CONTENT_TYPE])
+        .allow_headers([CONTENT_TYPE, HeaderName::from_static(EXTENSION_HEADER)])
 }
 
 async fn validate_request_origin(request: Request, next: Next) -> Response {
@@ -340,13 +320,17 @@ fn is_allowed_browser_origin(origin: &HeaderValue, headers: &axum::http::HeaderM
         .ok()
         .is_some_and(|value| value.starts_with("chrome-extension://"))
     {
-        return headers
-            .get(EXTENSION_HEADER)
-            .and_then(|value| value.to_str().ok())
-            == Some(EXTENSION_HEADER_VALUE);
+        return has_extension_header(headers);
     }
 
     false
+}
+
+fn has_extension_header(headers: &HeaderMap) -> bool {
+    headers
+        .get(EXTENSION_HEADER)
+        .and_then(|value| value.to_str().ok())
+        == Some(EXTENSION_HEADER_VALUE)
 }
 
 fn is_allowed_loopback_origin(origin: &HeaderValue) -> bool {
@@ -514,6 +498,14 @@ impl AppError {
         }
     }
 
+    fn forbidden(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code,
+            message: message.into(),
+        }
+    }
+
     fn internal(error: anyhow::Error) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -548,8 +540,11 @@ impl IntoResponse for AppError {
 
 #[cfg(test)]
 mod tests {
-    use super::is_allowed_loopback_origin;
-    use axum::http::HeaderValue;
+    use super::{
+        EXTENSION_HEADER, EXTENSION_HEADER_VALUE, has_extension_header, is_allowed_browser_origin,
+        is_allowed_loopback_origin,
+    };
+    use axum::http::{HeaderMap, HeaderValue};
 
     #[test]
     fn allows_loopback_http_origins() {
@@ -572,5 +567,42 @@ mod tests {
         assert!(!is_allowed_loopback_origin(&HeaderValue::from_static(
             "chrome-extension://abc123"
         )));
+    }
+
+    #[test]
+    fn allows_chrome_extension_origin_with_extension_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            EXTENSION_HEADER,
+            HeaderValue::from_static(EXTENSION_HEADER_VALUE),
+        );
+
+        assert!(is_allowed_browser_origin(
+            &HeaderValue::from_static("chrome-extension://abc123"),
+            &headers,
+        ));
+    }
+
+    #[test]
+    fn rejects_chrome_extension_origin_without_extension_header() {
+        assert!(!is_allowed_browser_origin(
+            &HeaderValue::from_static("chrome-extension://abc123"),
+            &HeaderMap::new(),
+        ));
+    }
+
+    #[test]
+    fn recognizes_required_extension_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            EXTENSION_HEADER,
+            HeaderValue::from_static(EXTENSION_HEADER_VALUE),
+        );
+
+        assert!(has_extension_header(&headers));
+
+        headers.insert(EXTENSION_HEADER, HeaderValue::from_static("wrong"));
+
+        assert!(!has_extension_header(&headers));
     }
 }

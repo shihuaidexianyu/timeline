@@ -498,37 +498,58 @@ fn build_fallback_clock_icon() -> Result<Icon> {
         }
     }
 
-    draw_clock_hand(&mut rgba, center, center, 0.0, 6.0, 1.2, dark, SIZE); // minute hand
     draw_clock_hand(
         &mut rgba,
         center,
+        ClockHand {
+            angle_rad: 0.0,
+            length: 6.0,
+            thickness: 1.2,
+            color: dark,
+        },
+        SIZE,
+    ); // minute hand
+    draw_clock_hand(
+        &mut rgba,
         center,
-        -55.0_f32.to_radians(),
-        4.5,
-        1.5,
-        dark,
+        ClockHand {
+            angle_rad: -55.0_f32.to_radians(),
+            length: 4.5,
+            thickness: 1.5,
+            color: dark,
+        },
         SIZE,
     ); // hour hand
-    draw_clock_hand(&mut rgba, center, center, 0.0, 3.1, 1.0, dark, SIZE); // top tick
+    draw_clock_hand(
+        &mut rgba,
+        center,
+        ClockHand {
+            angle_rad: 0.0,
+            length: 3.1,
+            thickness: 1.0,
+            color: dark,
+        },
+        SIZE,
+    ); // top tick
     set_pixel(&mut rgba, center as u32, center as u32, dark, SIZE);
 
     Icon::from_rgba(rgba, SIZE, SIZE).context("failed to create fallback tray icon")
 }
 
-fn draw_clock_hand(
-    rgba: &mut [u8],
-    cx: f32,
-    cy: f32,
+struct ClockHand {
     angle_rad: f32,
     length: f32,
     thickness: f32,
     color: [u8; 4],
-    size: u32,
-) {
-    let end_x = cx + angle_rad.sin() * length;
-    let end_y = cy - angle_rad.cos() * length;
+}
+
+fn draw_clock_hand(rgba: &mut [u8], center: f32, hand: ClockHand, size: u32) {
+    let cx = center;
+    let cy = center;
+    let end_x = cx + hand.angle_rad.sin() * hand.length;
+    let end_y = cy - hand.angle_rad.cos() * hand.length;
     let steps = 64u32;
-    let radius = thickness.max(1.0);
+    let radius = hand.thickness.max(1.0);
     for step in 0..=steps {
         let t = step as f32 / steps as f32;
         let x = (cx + (end_x - cx) * t).round() as i32;
@@ -540,7 +561,7 @@ fn draw_clock_hand(
                 let ddx = fx - x as f32;
                 let ddy = fy - y as f32;
                 if (ddx * ddx + ddy * ddy).sqrt() <= radius && fx >= 0.0 && fy >= 0.0 {
-                    set_pixel(rgba, fx as u32, fy as u32, color, size);
+                    set_pixel(rgba, fx as u32, fy as u32, hand.color, size);
                 }
             }
         }

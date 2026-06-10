@@ -7,11 +7,10 @@ import {
 } from './settings-form'
 
 const settings: AgentSettingsResponse = {
-  app_version: '1.0.2',
   autostart_enabled: true,
   tray_enabled: true,
   web_ui_url: 'http://127.0.0.1:4173',
-  launch_command: 'timeline.exe --backend',
+  launch_command: 'timeline.exe',
   idle_threshold_secs: 120,
   poll_interval_millis: 1000,
   health_reminder_enabled: true,

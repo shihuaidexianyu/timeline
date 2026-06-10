@@ -25,7 +25,7 @@
 
 - 启动时先读取一次当前前台窗口
 - 当窗口指纹变化时结束旧段、创建新段
-- 指纹由 `hwnd + process_id + window_title` 组成
+- 指纹默认由 `hwnd + process_id + window_title` 组成；当关闭窗口标题记录时，采集器不读取标题，指纹退化为 `hwnd + process_id`
 - 相同前台窗口连续轮询不会重复建段
 
 ### browser_segments
@@ -45,7 +45,7 @@
 
 ## “真实使用时间”口径
 
-- 当前版本把 `presence = active` 视为真实使用时间
+- 当前实现把 `presence = active` 视为真实使用时间
 - `idle` 和 `locked` 只保留在时间线中，不计入 `total_active_seconds`
 - 应用与域名总时长当前按时间线原始时长聚合
 

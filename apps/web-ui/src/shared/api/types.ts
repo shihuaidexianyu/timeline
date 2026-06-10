@@ -62,7 +62,6 @@ export type AgentMonitorStatus = {
 }
 
 export type AgentSettingsResponse = {
-  app_version: string
   autostart_enabled: boolean
   tray_enabled: boolean
   web_ui_url: string
@@ -100,23 +99,6 @@ export type UpdateAgentConfigRequest = {
 export type UpdateAgentConfigResponse = {
   saved: boolean
   requires_restart: boolean
-}
-
-export type AppUpdateInfo = {
-  current_version: string
-  latest_version: string
-  has_update: boolean
-  release_name: string | null
-  release_url: string
-  published_at: string | null
-  asset_name: string
-}
-
-export type InstallUpdateResponse = {
-  started: boolean
-  target_version: string
-  release_url: string
-  asset_name: string
 }
 
 export type KeyedDurationEntry = {

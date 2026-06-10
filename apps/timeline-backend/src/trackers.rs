@@ -34,7 +34,7 @@ async fn run_focus_tracker(state: AgentState) -> Result<()> {
         let observed_at = OffsetDateTime::now_utc();
         state.mark_focus_online(observed_at).await;
 
-        match capture_foreground_window() {
+        match capture_foreground_window(runtime_config.record_window_titles) {
             Ok(snapshot) => {
                 sync_focus_snapshot(&state, snapshot, observed_at, &runtime_config).await?
             }
@@ -309,6 +309,7 @@ pub async fn sync_browser_event(
     observed_at: OffsetDateTime,
 ) -> Result<common::BrowserEventAck> {
     let runtime_config = state.runtime_config_snapshot().await;
+    let payload = browser_payload_for_storage(payload, runtime_config.record_page_titles);
     state.mark_browser_online(observed_at).await;
     state
         .store()
@@ -342,7 +343,7 @@ pub async fn sync_browser_event(
             .as_ref()
             .map(|focus| focus.is_browser)
             .unwrap_or(false)
-    } || capture_foreground_window()
+    } || capture_foreground_window(false)
         .ok()
         .flatten()
         .map(|snapshot| snapshot.is_browser)
@@ -400,15 +401,6 @@ pub async fn sync_browser_event(
         }
     }
 
-    let payload = common::BrowserEventPayload {
-        page_title: if runtime_config.record_page_titles {
-            payload.page_title
-        } else {
-            None
-        },
-        ..payload
-    };
-
     let id = state
         .store()
         .start_browser_segment(&payload, observed_at)
@@ -446,6 +438,20 @@ fn is_ignored_domain(runtime_config: &RuntimeConfigSnapshot, domain: &str) -> bo
         .any(|candidate| candidate.eq_ignore_ascii_case(domain))
 }
 
+fn browser_payload_for_storage(
+    payload: common::BrowserEventPayload,
+    record_page_titles: bool,
+) -> common::BrowserEventPayload {
+    common::BrowserEventPayload {
+        page_title: if record_page_titles {
+            payload.page_title
+        } else {
+            None
+        },
+        ..payload
+    }
+}
+
 fn display_name_for_process(process_name: &str) -> String {
     match process_name.to_ascii_lowercase().as_str() {
         "msedge.exe" => "Microsoft Edge".to_string(),
@@ -474,5 +480,34 @@ fn title_case_word(value: &str) -> String {
             result
         }
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::browser_payload_for_storage;
+
+    fn browser_payload(page_title: Option<&str>) -> common::BrowserEventPayload {
+        common::BrowserEventPayload {
+            domain: "example.com".to_string(),
+            page_title: page_title.map(str::to_string),
+            browser_window_id: 1,
+            tab_id: 2,
+            observed_at: None,
+        }
+    }
+
+    #[test]
+    fn strips_page_title_when_recording_is_disabled() {
+        let payload = browser_payload_for_storage(browser_payload(Some("Private page")), false);
+
+        assert_eq!(payload.page_title, None);
+    }
+
+    #[test]
+    fn keeps_page_title_when_recording_is_enabled() {
+        let payload = browser_payload_for_storage(browser_payload(Some("Useful page")), true);
+
+        assert_eq!(payload.page_title.as_deref(), Some("Useful page"));
     }
 }

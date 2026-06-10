@@ -1030,75 +1030,6 @@
   font-size: 0.94rem;
 }
 
-.settings-update-card {
-  display: grid;
-  gap: 12px;
-}
-
-.settings-update-summary {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.settings-update-summary div {
-  display: grid;
-  gap: 5px;
-  padding: 12px;
-  border: 1px solid var(--border-card);
-  border-radius: 14px;
-  background: var(--surface-inset);
-}
-
-.settings-update-summary span,
-.settings-update-meta {
-  color: var(--text-dim);
-  font-family: var(--mono-family);
-  font-size: 0.82rem;
-}
-
-.settings-update-summary strong {
-  color: var(--text-main);
-  font-family: var(--mono-family);
-  font-size: 1.01rem;
-  overflow-wrap: anywhere;
-}
-
-.settings-update-copy {
-  margin: 0;
-  color: var(--text-soft);
-  font-size: 0.99rem;
-  line-height: 1.6;
-}
-
-.settings-update-copy code {
-  color: var(--text-main);
-  font-family: var(--mono-family);
-  font-size: 0.92rem;
-}
-
-.settings-update-meta {
-  margin: 0;
-}
-
-.settings-update-link {
-  width: fit-content;
-  color: var(--accent-color);
-  font-family: var(--mono-family);
-  font-size: 0.89rem;
-  text-decoration: none;
-}
-
-.settings-update-link:hover {
-  color: var(--accent-text);
-}
-
-.settings-update-actions {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
 .settings-config-grid {
   margin-top: 14px;
   display: grid;
@@ -3459,7 +3390,6 @@
   .period-summary-grid,
   .stats-grid-lists,
   .showcase-stat-grid,
-  .settings-update-summary,
   .focus-distribution-layout,
   .focus-metric-stack,
   .weekly-summary-row,
@@ -3589,10 +3519,6 @@ html[data-theme="dark"] .calendar-cell[class*='calendar-heat-'] {
 
 html[data-theme="dark"] .calendar-heat-0 .calendar-day-number {
   color: color-mix(in srgb, var(--text-soft) 55%, transparent);
-}
-
-html[data-theme="dark"] .settings-update-link:hover {
-  color: var(--accent-color-strong);
 }
 
 .settings-theme-options {

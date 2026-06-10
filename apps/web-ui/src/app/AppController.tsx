@@ -1,18 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { AppShell } from './AppShell'
 import { useHashRoute } from './page-route'
 import { useSelectedDateState } from './use-selected-date-state'
 import {
   useAgentSettingsQuery,
-  useInstallUpdateMutation,
   useMonthCalendarQuery,
   usePeriodSummaryQuery,
   useTimelineDayQuery,
   useUpdateAgentConfigMutation,
   useUpdateAutostartMutation,
-  useUpdateCheckMutation,
-  type AppUpdateInfo,
-  type InstallUpdateResponse,
 } from '../shared/api'
 import {
   buildDashboardModel,
@@ -34,11 +30,6 @@ export function AppController() {
   const [page, setPage] = useHashRoute()
   const [settingsError, setSettingsError] = useState<string | null>(null)
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null)
-  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null)
-  const [updateError, setUpdateError] = useState<string | null>(null)
-  const [updateNotice, setUpdateNotice] = useState<string | null>(null)
-  const [checkingUpdate, setCheckingUpdate] = useState(false)
-  const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null)
   const [appFilter, setAppFilter] = useState<DashboardFilter>(null)
   const [domainFilter, setDomainFilter] = useState<DashboardFilter>(null)
   const [timelineActiveOnly, setTimelineActiveOnly] = useState(false)
@@ -46,7 +37,6 @@ export function AppController() {
   const [timelineSegmentKind, setTimelineSegmentKind] =
     useState<TimelineSegmentKind>('all')
   const [focusedSegmentId, setFocusedSegmentId] = useState<string | null>(null)
-  const didAutoCheckUpdateRef = useRef(false)
 
   const timelineQuery = useTimelineDayQuery(null)
   const timeline = timelineQuery.data ?? null
@@ -56,10 +46,14 @@ export function AppController() {
   const agentTimezone = timeline?.timezone ?? null
   const dateState = useSelectedDateState({ agentToday, agentTimezone })
   const selectedTimelineQuery = useTimelineDayQuery(dateState.selectedDate, {
-    enabled: dateState.selectedDate !== null,
+    enabled:
+      dateState.selectedDate !== null &&
+      dateState.selectedDate !== timeline?.date,
   })
   const selectedPeriodQuery = usePeriodSummaryQuery(dateState.selectedDate, {
-    enabled: dateState.selectedDate !== null,
+    enabled:
+      dateState.selectedDate !== null &&
+      dateState.selectedDate !== (periodQuery.data?.date ?? timeline?.date),
   })
   const selectedTimeline = dateState.selectedDate
     ? selectedTimelineQuery.data ??
@@ -70,8 +64,6 @@ export function AppController() {
       (dateState.selectedDate === periodQuery.data?.date ? periodQuery.data : undefined)
     : periodQuery.data
   const calendarQuery = useMonthCalendarQuery(dateState.calendarMonth)
-  const checkUpdateMutation = useUpdateCheckMutation()
-  const installUpdateMutation = useInstallUpdateMutation()
   const updateConfigMutation = useUpdateAgentConfigMutation()
   const updateAutostartMutation = useUpdateAutostartMutation()
 
@@ -96,48 +88,13 @@ export function AppController() {
     timelineQuery.dataUpdatedAt,
     selectedTimelineQuery.dataUpdatedAt,
   )
-
-  useEffect(() => {
-    if (lastTimelineDataUpdatedAt > 0) {
-      setLastUpdatedAt(new Date(lastTimelineDataUpdatedAt).toLocaleTimeString())
-    }
-  }, [lastTimelineDataUpdatedAt])
-
-  const refreshUpdateInfo = useCallback(
-    async (silent = false) => {
-      if (!silent) {
-        setCheckingUpdate(true)
-      }
-      setUpdateError(null)
-      setUpdateNotice(null)
-
-      try {
-        const nextUpdateInfo = await checkUpdateMutation.mutateAsync()
-        setUpdateInfo(nextUpdateInfo)
-        setUpdateNotice(
-          nextUpdateInfo.has_update
-            ? `发现新版本 ${nextUpdateInfo.latest_version}，可以直接在线升级。`
-            : '当前已经是最新版本。',
-        )
-      } catch (loadError) {
-        setUpdateError(errorToMessage(loadError, '检查更新时发生未知错误'))
-      } finally {
-        if (!silent) {
-          setCheckingUpdate(false)
-        }
-      }
-    },
-    [checkUpdateMutation],
+  const lastUpdatedAt = useMemo(
+    () =>
+      lastTimelineDataUpdatedAt > 0
+        ? new Date(lastTimelineDataUpdatedAt).toLocaleTimeString()
+        : null,
+    [lastTimelineDataUpdatedAt],
   )
-
-  useEffect(() => {
-    if (page !== 'settings' || !settingsQuery.data || didAutoCheckUpdateRef.current) {
-      return
-    }
-
-    didAutoCheckUpdateRef.current = true
-    void refreshUpdateInfo(true)
-  }, [page, refreshUpdateInfo, settingsQuery.data])
 
   const dashboard = useMemo(
     () => (selectedTimeline ? buildDashboardModel(selectedTimeline, false) : null),
@@ -185,18 +142,6 @@ export function AppController() {
     dateState.selectCalendarMonth(nextMonth)
     setDomainFilter(null)
     setFocusedSegmentId(null)
-  }
-
-  async function handleInstallLatestUpdate() {
-    setUpdateError(null)
-    setUpdateNotice(null)
-
-    try {
-      const result: InstallUpdateResponse = await installUpdateMutation.mutateAsync()
-      setUpdateNotice(`已开始升级到 ${result.target_version}，本地服务即将自动重启。`)
-    } catch (installError) {
-      setUpdateError(errorToMessage(installError, '启动在线升级失败'))
-    }
   }
 
   return (
@@ -275,17 +220,12 @@ export function AppController() {
               error={serviceError}
               settingsError={settingsError ?? errorToNullableMessage(settingsQuery.error)}
               settingsNotice={settingsNotice}
-              updateInfo={updateInfo}
-              updateError={updateError}
-              updateNotice={updateNotice}
               lastUpdatedAt={lastUpdatedAt}
               selectedDate={resolvedSelectedDate}
               timezone={resolvedTimezone}
               savingAutostart={updateAutostartMutation.isPending}
               savingConfig={updateConfigMutation.isPending}
               isSettingsRefreshing={settingsQuery.isFetching && Boolean(settingsQuery.data)}
-              checkingUpdate={checkingUpdate}
-              installingUpdate={installUpdateMutation.isPending}
               theme={theme}
               onChangeTheme={setTheme}
               onToggleAutostart={async (enabled) => {
@@ -316,12 +256,6 @@ export function AppController() {
                 } catch (updateError) {
                   setSettingsError(errorToMessage(updateError, '更新本地配置失败'))
                 }
-              }}
-              onCheckUpdate={async () => {
-                await refreshUpdateInfo()
-              }}
-              onInstallUpdate={async () => {
-                await handleInstallLatestUpdate()
               }}
             />
           ) : null}

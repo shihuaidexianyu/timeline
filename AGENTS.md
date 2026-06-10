@@ -10,7 +10,7 @@
 
 ```text
 timeline-desktop/
-├── Cargo.toml                 # Workspace 根配置，唯一版本来源
+├── Cargo.toml                 # Workspace 根配置
 ├── apps/
 │   ├── timeline-backend/      # Rust 后端（包名 timeline，可执行文件 timeline.exe）
 │   ├── web-ui/                # React + Vite 前端
@@ -23,8 +23,9 @@ timeline-desktop/
 │   ├── schema.md              # SQLite 表结构说明
 │   └── frontend-guidelines.md # 前端骨架与交互规范（必读）
 ├── scripts/
-│   ├── build-portable.ps1     # 构建便携版 zip
-│   └── sync-version.ps1       # 同步版本号到前端与扩展
+│   └── build-installer.ps1    # 构建面向用户的 Windows 安装包
+├── installer/
+│   └── timeline.iss           # Inno Setup 安装包脚本
 ├── config/
 │   └── timeline.example.toml  # 配置示例
 └── .github/workflows/
@@ -94,13 +95,11 @@ cargo test -p common
 
 ## 架构概览
 
-### 三模式可执行文件
+### 可执行文件模式
 
-`timeline.exe` 根据命令行参数进入不同模式：
+`timeline.exe` 直接启动采集服务、HTTP API 和系统托盘。
 
-- **Launcher 模式（默认）:** 读取安装根目录下的 `current.json`，解析当前应运行的版本，然后带 `--backend` 参数启动对应版本的后端可执行文件。便携包直接运行 `timeline.exe` 即进入此模式。
-- **Backend 模式（`--backend`）:** 启动采集服务、HTTP API、系统托盘。
-- **ApplyUpdate 模式（`--apply-update`）:** 由 updater 在后台调用，负责解压新版本、原子切换 `current.json`、重启进程、健康检查与回滚。
+内置在线升级机制已移除；版本更新通过重新安装新版本安装包完成，安装包升级不会覆盖用户的 `config/` 与 `data/`。
 
 ### 核心数据流
 
@@ -111,7 +110,7 @@ cargo test -p common
 
 ### 关键源码文件
 
-- `apps/timeline-backend/src/main.rs` — 三模式入口与启动流程
+- `apps/timeline-backend/src/main.rs` — 后端服务入口与启动流程
 - `apps/timeline-backend/src/config.rs` — TOML 配置加载、默认值、路径解析
 - `apps/timeline-backend/src/trackers.rs` — focus / presence 轮询与浏览器事件合并逻辑
 - `apps/timeline-backend/src/state.rs` — 全局运行时状态（Arc 包裹）
@@ -119,8 +118,6 @@ cargo test -p common
 - `apps/timeline-backend/src/http.rs` — Axum 路由与 CORS/Origin 校验
 - `apps/timeline-backend/src/windows.rs` — Win32 API 封装（前台窗口、idle 检测）
 - `apps/timeline-backend/src/system.rs` — 托盘、自启动注册表、toast 通知
-- `apps/timeline-backend/src/layout.rs` — 便携版目录布局解析
-- `apps/timeline-backend/src/updater.rs` — GitHub Release 检查与在线升级
 - `crates/common/src/lib.rs` — 共享 API 类型（ envelope、segment、settings 等）
 - `apps/browser-extension/service-worker.js` — 扩展核心逻辑（标签页缓存、心跳、上报）
 - `apps/browser-extension/content-script.js` — 在 loopback 页面向扩展通知 agent origin
@@ -153,8 +150,6 @@ CORS 限制：浏览器请求 Origin 必须是 loopback（`127.0.0.1`、`localho
 - `POST /api/settings/config`
 - `POST /api/settings/autostart`
 - `POST /api/events/browser`
-- `GET /api/update/check`
-- `POST /api/update/install`
 
 详见 `docs/api.md`。
 
@@ -196,67 +191,29 @@ CORS 限制：浏览器请求 Origin 必须是 loopback（`127.0.0.1`、`localho
 
 ---
 
-## 版本管理
-
-唯一版本来源是根目录 `Cargo.toml` 中的 `[workspace.package].version`。
-
-同步命令：
-
-```powershell
-.\scripts\sync-version.ps1
-```
-
-该脚本会把版本同步到：
-- `apps/web-ui/package.json`
-- `apps/web-ui/package-lock.json`
-- `apps/browser-extension/manifest.json`
-
-校验（不修改）：
-
-```powershell
-.\scripts\sync-version.ps1 -CheckOnly
-```
-
----
-
 ## 打包与发布
 
-### 本地构建便携版
+### 本地构建安装包
 
 前置条件：已安装 Node.js / npm 和 Rust toolchain。
 
+安装包构建还需要安装 Inno Setup 6/7，并确保 `ISCC.exe` 在 PATH 中，或通过 `-InnoSetupCompiler` 显式指定。
+
 ```powershell
-.\scripts\build-portable.ps1
+.\scripts\build-installer.ps1
 ```
 
-输出位置：`target/portable/output/timeline-portable-<version>.zip`
+输出位置：`target/installer/output/timeline-setup.exe`
 
-脚本会依次完成：
-1. 调用 `sync-version.ps1`
-2. `cd apps/web-ui && npm run build`
-3. `cargo build --profile release -p timeline`
-4. 组装便携版目录结构并压缩
-
-### 便携版目录结构
-
-```text
-timeline.exe                 # 稳定入口（Launcher）
-config/timeline.toml         # 默认配置
-data/                        # 用户数据目录
-web-ui/dist/                 # 前端静态文件
-browser-extension/           # 浏览器扩展目录
-versions/<version>/          # 当前版本后端与资源
-current.json                 # 当前激活版本指针
-```
+该脚本会构建 `apps/web-ui/dist`、编译 `timeline.exe`、组装安装源目录，再调用 Inno Setup 打包。安装包是普通用户主入口。
 
 ### GitHub Actions
 
 `.github/workflows/package-windows.yml`：
 - 在 Release `published` 时自动触发
 - 支持手动 `workflow_dispatch` 触发
-- 先校验版本同步与 Tag 一致性
-- 调用 `build-portable.ps1`
-- 将 `.zip` 上传到 Release assets
+- 安装 Inno Setup 并调用 `build-installer.ps1`
+- 将 `.exe` 安装包和 `SHA256SUMS.txt` 上传到 Release assets
 
 ---
 
@@ -284,4 +241,3 @@ current.json                 # 当前激活版本指针
 
 - Rust：使用 edition 2024，`cargo fmt` 与 `cargo clippy` 建议保持干净。
 - 前端：`npm run lint` 必须通过；`npm run build` 必须成功；遵循 `docs/frontend-guidelines.md` 中的骨架与交互规范。
-- 修改涉及版本号时，务必运行 `sync-version.ps1` 保持多端一致。

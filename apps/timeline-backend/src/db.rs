@@ -1148,7 +1148,7 @@ fn to_duration_stats(
         })
         .collect();
 
-    rows.sort_by(|left, right| right.seconds.cmp(&left.seconds));
+    rows.sort_by_key(|row| std::cmp::Reverse(row.seconds));
     rows
 }
 
@@ -1212,9 +1212,11 @@ mod tests {
             OffsetDateTime::now_utc().unix_timestamp_nanos()
         );
         let database_path = std::env::temp_dir().join(unique);
-        let mut config = AppConfig::default();
-        config.database_path = database_path.clone();
-        config.lockfile_path = temp_lock_path(&database_path);
+        let config = AppConfig {
+            database_path: database_path.clone(),
+            lockfile_path: temp_lock_path(&database_path),
+            ..AppConfig::default()
+        };
 
         let store = AgentStore::connect(&config).await.expect("connect store");
         let started_at =

@@ -54,11 +54,6 @@ async function mockApi(page: Page) {
       return
     }
 
-    if (path === '/api/update/check') {
-      await route.fulfill({ json: envelope(updateInfo) })
-      return
-    }
-
     if (path === '/api/settings/autostart') {
       await route.fulfill({ json: envelope({ autostart_enabled: true }) })
       return
@@ -159,11 +154,10 @@ const monthCalendar = {
 }
 
 const agentSettings = {
-  app_version: '1.0.2',
   autostart_enabled: true,
   tray_enabled: true,
   web_ui_url: 'http://127.0.0.1:4173',
-  launch_command: 'timeline.exe --backend',
+  launch_command: 'timeline.exe',
   idle_threshold_secs: 60,
   poll_interval_millis: 1000,
   health_reminder_enabled: true,
@@ -183,12 +177,3 @@ const agentSettings = {
   ],
 }
 
-const updateInfo = {
-  current_version: '1.0.2',
-  latest_version: '1.0.2',
-  has_update: false,
-  release_name: null,
-  release_url: 'https://example.com/release',
-  published_at: null,
-  asset_name: 'timeline-portable-1.0.2.zip',
-}

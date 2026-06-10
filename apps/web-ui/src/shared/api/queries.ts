@@ -6,11 +6,9 @@ import {
 } from '@tanstack/react-query'
 import {
   getAgentSettings,
-  getAppUpdateInfo,
   getMonthCalendar,
   getPeriodSummary,
   getTimeline,
-  installLatestUpdate,
   updateAgentConfig,
   updateAutostart,
 } from './client'
@@ -78,18 +76,6 @@ export function useAgentSettingsQuery() {
     queryKey: apiQueryKeys.agentSettings(),
     queryFn: ({ signal }) => getAgentSettings(signal),
     placeholderData: keepPreviousData,
-  })
-}
-
-export function useUpdateCheckMutation() {
-  return useMutation({
-    mutationFn: () => getAppUpdateInfo(),
-  })
-}
-
-export function useInstallUpdateMutation() {
-  return useMutation({
-    mutationFn: () => installLatestUpdate(),
   })
 }
 

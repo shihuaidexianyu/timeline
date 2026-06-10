@@ -1,10 +1,8 @@
 import type {
   AgentSettingsResponse,
   ApiEnvelope,
-  AppUpdateInfo,
   DurationStat,
   FocusStats,
-  InstallUpdateResponse,
   MonthCalendarResponse,
   PeriodSummaryResponse,
   TimelineDayResponse,
@@ -134,7 +132,6 @@ export function getFocusStats(date: string, signal?: AbortSignal) {
 export function getAgentSettings(signal?: AbortSignal) {
   return request<AgentSettingsResponse>('/api/settings', { signal }).then((raw) => ({
     ...raw,
-    app_version: typeof raw.app_version === 'string' ? raw.app_version : '0.0.0',
     idle_threshold_secs:
       typeof raw.idle_threshold_secs === 'number' ? raw.idle_threshold_secs : 300,
     poll_interval_millis:
@@ -154,10 +151,6 @@ export function getAgentSettings(signal?: AbortSignal) {
   }))
 }
 
-export function getAppUpdateInfo(signal?: AbortSignal) {
-  return request<AppUpdateInfo>('/api/update/check', { signal })
-}
-
 export async function updateAutostart(payload: UpdateAutostartRequest) {
   return request<UpdateAutostartResponse>('/api/settings/autostart', {
     method: 'POST',
@@ -171,13 +164,6 @@ export async function updateAgentConfig(payload: UpdateAgentConfigRequest) {
     method: 'POST',
     body: payload,
     fallbackError: '更新本地配置失败',
-  })
-}
-
-export async function installLatestUpdate() {
-  return request<InstallUpdateResponse>('/api/update/install', {
-    method: 'POST',
-    fallbackError: '启动在线升级失败',
   })
 }
 

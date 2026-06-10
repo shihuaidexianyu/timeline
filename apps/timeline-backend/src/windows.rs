@@ -46,7 +46,9 @@ impl ForegroundWindowSnapshot {
     }
 }
 
-pub fn capture_foreground_window() -> Result<Option<ForegroundWindowSnapshot>> {
+pub fn capture_foreground_window(
+    include_window_title: bool,
+) -> Result<Option<ForegroundWindowSnapshot>> {
     let hwnd = unsafe { GetForegroundWindow() };
     if hwnd.0.is_null() {
         return Ok(None);
@@ -71,7 +73,11 @@ pub fn capture_foreground_window() -> Result<Option<ForegroundWindowSnapshot>> {
         .unwrap_or("unknown.exe")
         .to_string();
     let session_id = read_session_id(process_id)?;
-    let window_title = read_window_title(hwnd);
+    let window_title = if include_window_title {
+        read_window_title(hwnd)
+    } else {
+        None
+    };
 
     Ok(Some(ForegroundWindowSnapshot {
         hwnd: hwnd.0 as isize,

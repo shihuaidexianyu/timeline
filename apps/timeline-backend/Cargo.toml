@@ -1,6 +1,5 @@
 [package]
 name = "timeline"
-version.workspace = true
 edition.workspace = true
 license.workspace = true
 
@@ -9,8 +8,6 @@ anyhow.workspace = true
 axum.workspace = true
 common = { path = "../../crates/common" }
 fs2 = "0.4.3"
-reqwest.workspace = true
-semver.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
@@ -24,7 +21,6 @@ tao = "0.34"
 tray-icon = "0.21.3"
 winrt-notification = "0.5.1"
 winreg = "0.55.0"
-zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
 windows = { version = "0.62.2", features = [
   "Win32_Foundation",
   "Win32_System_Com",

@@ -2,7 +2,6 @@ import { useState } from 'react'
 import {
   API_BASE_URL,
   type AgentSettingsResponse,
-  type AppUpdateInfo,
   type UpdateAgentConfigRequest,
 } from '../api'
 import {
@@ -20,23 +19,16 @@ export function SettingsPage(props: {
   error: string | null
   settingsError: string | null
   settingsNotice: string | null
-  updateInfo: AppUpdateInfo | null
-  updateError: string | null
-  updateNotice: string | null
   lastUpdatedAt: string | null
   selectedDate: string
   timezone: string
   savingAutostart: boolean
   savingConfig: boolean
   isSettingsRefreshing: boolean
-  checkingUpdate: boolean
-  installingUpdate: boolean
   theme: ThemeMode
   onChangeTheme: (theme: ThemeMode) => void
   onToggleAutostart: (enabled: boolean) => Promise<void>
   onUpdateConfig: (payload: UpdateAgentConfigRequest) => Promise<void>
-  onCheckUpdate: () => Promise<void>
-  onInstallUpdate: () => Promise<void>
 }) {
   return (
     <section className="page-stack">
@@ -76,12 +68,8 @@ export function SettingsPage(props: {
               <RefreshBadge active={props.isSettingsRefreshing} />
             </div>
             <dl className="settings-list">
-              {props.loading ? <SettingsListSkeleton rows={6} /> : (
+              {props.loading ? <SettingsListSkeleton rows={5} /> : (
                 <>
-                  <div>
-                    <dt>当前版本</dt>
-                    <dd>v{props.agentSettings?.app_version ?? '--'}</dd>
-                  </div>
                   <div>
                     <dt>接口地址</dt>
                     <dd>{API_BASE_URL}</dd>
@@ -105,92 +93,6 @@ export function SettingsPage(props: {
                 </>
               )}
             </dl>
-          </div>
-
-          <div className="panel page-panel settings-card">
-            <div className="panel-header">
-              <div>
-                <p className="section-kicker">升级</p>
-                <h2>在线升级</h2>
-              </div>
-            </div>
-
-            <div className="settings-update-card">
-              <div className="settings-update-summary">
-                <div>
-                  <span>当前版本</span>
-                  <strong>v{props.agentSettings?.app_version ?? '--'}</strong>
-                </div>
-                <div>
-                  <span>Latest</span>
-                  <strong>
-                    {props.updateInfo ? `v${props.updateInfo.latest_version}` : '等待检查'}
-                  </strong>
-                </div>
-                <div>
-                  <span>安装包</span>
-                  <strong>{props.updateInfo?.asset_name ?? 'timeline-portable-*.zip'}</strong>
-                </div>
-              </div>
-
-              <p className="settings-update-copy">
-                从 GitHub Release latest 拉取最新便携包，只覆盖程序文件，保留本地
-                <code>config/timeline.toml</code> 和 <code>data/</code>。
-              </p>
-
-              {props.updateInfo?.published_at ? (
-                <p className="settings-update-meta">
-                  发布时间 {new Date(props.updateInfo.published_at).toLocaleString()}
-                </p>
-              ) : null}
-
-              {props.updateInfo?.release_url ? (
-                <a
-                  className="settings-update-link"
-                  href={props.updateInfo.release_url}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  查看 Release
-                </a>
-              ) : null}
-
-              <div className="settings-update-actions">
-                <button
-                  type="button"
-                  className="settings-save-button"
-                  disabled={props.loading || props.checkingUpdate || props.installingUpdate}
-                  onClick={() => {
-                    void props.onCheckUpdate()
-                  }}
-                >
-                  {props.checkingUpdate ? '检查中…' : '检查更新'}
-                </button>
-
-                <button
-                  type="button"
-                  className="settings-save-button settings-save-button-secondary"
-                  disabled={
-                    props.loading ||
-                    props.checkingUpdate ||
-                    props.installingUpdate ||
-                    !props.updateInfo?.has_update
-                  }
-                  onClick={() => {
-                    void props.onInstallUpdate()
-                  }}
-                >
-                  {props.installingUpdate ? '升级中…' : '升级并重启'}
-                </button>
-              </div>
-
-              {!props.loading && props.updateError ? (
-                <div className="settings-error">{props.updateError}</div>
-              ) : null}
-              {!props.loading && props.updateNotice ? (
-                <div className="settings-notice">{props.updateNotice}</div>
-              ) : null}
-            </div>
           </div>
 
           <div className="panel page-panel settings-card">

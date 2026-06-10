@@ -1,6 +1,5 @@
 //! Loads the timeline agent configuration from TOML and provides safe defaults.
 
-use crate::layout;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -8,6 +7,7 @@ use std::path::{Path, PathBuf};
 const DEFAULT_CONFIG_PATH: &str = "config/timeline.toml";
 const LEGACY_CONFIG_PATH: &str = "config/timeline-agent.toml";
 const LEGACY_DEV_WEB_UI_URL: &str = "http://127.0.0.1:4173/#/stats";
+const INSTALL_ROOT_ENV: &str = "TIMELINE_INSTALL_ROOT";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -187,7 +187,7 @@ fn resolve_config_path(explicit_path: Option<PathBuf>, runtime_root: &Path) -> R
 }
 
 fn discover_runtime_root() -> Result<PathBuf> {
-    if let Some(install_root) = std::env::var_os(layout::INSTALL_ROOT_ENV) {
+    if let Some(install_root) = std::env::var_os(INSTALL_ROOT_ENV) {
         let install_root = PathBuf::from(install_root);
         if install_root.is_dir() {
             return Ok(install_root);

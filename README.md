@@ -1,72 +1,72 @@
-# timeline
+# timeline-desktop
 
-![timeline screenshot 1](assets/1.png)
-![timeline screenshot 2](assets/2.png)
-![timeline screenshot 2](assets/3.png)
+一个面向 Windows 的本地活动时间线工具。它在本机记录应用前台状态、浏览器活跃域名与 idle/locked 状态，并把数据写入本地 SQLite，由本地 Web UI 展示为时间线与统计结果。
 
-一个面向 Windows 的本地个人活动时间线工具。
+## 目标
 
-它的目标很简单：在本机采集前台应用、浏览器域名和活跃状态，写入本地 SQLite，再通过本地 Web UI 把一天的时间都去了哪里展示出来。
+- 只采集本机与浏览器活动，不接触敏感隐私数据（不读输入内容、不读剪贴板、不抓截图）
+- 全部数据默认保存在本机
+- 仅允许回环地址请求后端 API
+- 通过安装包分发，不依赖在线升级
 
-## 组件结构
+## 项目结构
 
-- `apps/timeline-backend`
-  Rust 本地常驻服务。负责 Windows 采集、SQLite 存储、本地 HTTP API、托盘、自启动设置。
-- `apps/web-ui`
-  React + Vite 本地前端。负责时间线、统计图和设置页。
-- `apps/browser-extension`
-  Edge / Chrome 通用的 Manifest V3 扩展。负责把当前活动标签页域名上报给本地服务。
-- `crates/common`
-  agent、前端、扩展共享的数据结构。
-- `docs/`
-  架构、接口和数据模型说明。
-  - [架构设计](docs/architecture.md)
-  - [接口说明](docs/api.md)
-  - [数据模型](docs/schema.md)
-  - [前端交互与骨架规范](docs/frontend-guidelines.md)
+- `apps/timeline-backend`：Rust 后端服务（`timeline.exe`）
+- `apps/web-ui`：React + Vite 前端页面
+- `apps/browser-extension`：Chrome/Edge Manifest V3 扩展（MV3）
+- `crates/common`：后端与前端共享数据结构
+- `config`：示例配置
+- `scripts/build-installer.ps1`：Windows 安装包构建脚本
+- `installer/timeline.iss`：Inno Setup 打包脚本
+- `docs/`：架构、API、数据库与前端规范文档
 
-## 当前能力
+## 核心能力
 
-- 采集前台应用、进程名、窗口标题
-- 采集 `active / idle / locked` 状态
-- 接收浏览器扩展上报的域名活动
-- 写入本地 SQLite
-- 提供每日时间线、应用统计、域名统计、专注统计 API
-- 提供本地 Web UI
-- 提供系统托盘入口
-- 支持连续活跃超阈值后的健康休息提醒
-- 支持开机自启动开关
-- 支持从 GitHub Release latest 在线升级便携版
+- 采集前台应用（应用名、进程名、可选窗口标题）
+- 记录 `active / idle / locked` 状态
+- 接收扩展上报的当前浏览器标签页域名
+- 本地 SQLite 持久化（`focus_segments`、`browser_segments`、`presence_segments`）
+- 聚合统计接口（应用/域名/专注）
+- 本地 Web UI 时间线与报表
+- 系统托盘与开机自启动开关
+- 连续活跃提醒（可配置）
+- 配置驱动的忽略列表（应用名、域名）
 
-## 隐私边界
+## 安装方式（推荐）
 
-- 默认只记录应用名、进程信息、窗口标题、域名和活跃状态
-- 默认不记录页面正文、输入内容、剪贴板和截图
-- 数据默认只保存在本地 SQLite
-- 本地 HTTP API 默认只允许 loopback 来源的浏览器访问
+发布包只有一种：Windows 安装程序。
 
-## 开发运行
+1. 在 GitHub Releases 下载 `timeline-setup.exe`
+2. 双击安装，默认安装到当前用户环境
+3. 运行开始菜单中的 Timeline
 
-### 1. 启动 agent
+安装器策略：
+
+- 不要求管理员权限（按需调用系统弹窗）
+- 首次安装会写入默认 `config/timeline.toml`
+- 后续版本安装不会覆盖已有 `config/` 与 `data/`
+- 卸载默认保留 `config/` 与 `data/`
+
+项目已经去掉在线升级流程；更新请下载新安装包并重新安装。
+
+## 开发环境运行
+
+### 1）后端（Rust）
 
 ```powershell
 cargo run -p timeline
 ```
 
-如果要显式指定配置文件：
+显式指定配置文件：
 
 ```powershell
 cargo run -p timeline -- --config config/timeline.toml
 ```
 
-默认监听地址是 `127.0.0.1:46215`。
+默认监听：`127.0.0.1:46215`。  
+若配置位于 `config/`，请按“配置文件所在目录”理解相对路径。
 
-注意：
-
-- 如果配置文件放在 `config\` 目录下，配置里的相对路径应按“相对于配置文件目录”来写
-- 示例配置里数据库路径使用 `../data/...`，就是为了匹配这个规则
-
-### 2. 启动前端
+### 2）前端（Node）
 
 ```powershell
 cd apps/web-ui
@@ -74,172 +74,89 @@ npm install
 npm run dev
 ```
 
-开发模式下，前端默认读取 `http://127.0.0.1:46215`。
+开发服务器会请求 `http://127.0.0.1:46215`。  
+可用环境变量覆写：`VITE_API_BASE_URL`
 
-可选环境变量：
+### 3）浏览器扩展
 
-- `VITE_API_BASE_URL`
-  显式指定本地 agent API 地址
-
-### 3. 加载浏览器扩展
-
-扩展目录在 `apps/browser-extension`。
-
-加载方式：
-
-1. 打开 `edge://extensions` 或 `chrome://extensions`
-2. 开启开发者模式
-3. 选择“加载已解压的扩展程序”
-4. 指向 `apps/browser-extension`
-
-补充说明：
-
-- 扩展会记住最近一次成功连接的本地 agent 地址
-- 如果你把 agent 改到了非默认 loopback 端口，先打开一次自托管仪表盘，扩展会自动学习当前地址
+1. 访问 `edge://extensions` 或 `chrome://extensions`
+2. 开启“开发者模式”
+3. 点击“加载已解压的扩展程序”
+4. 选择 `apps/browser-extension`
 
 ## 配置
 
-示例配置在 [config/timeline.example.toml](config/timeline.example.toml)。
+示例文件：`config/timeline.example.toml`
 
-当前主要配置项：
+主要字段（示例）：
 
-- `database_path`
-  SQLite 文件路径
-- `lockfile_path`
-  单实例锁文件路径
-- `listen_addr`
-  本地 HTTP 服务监听地址
-- `web_ui_url`
-  托盘和设置页里展示的 Web UI 地址
-- `idle_threshold_secs`
-  多久无输入后判定为 idle
-- `health_reminder_enabled`
-  是否启用连续活跃后的休息提醒
-- `health_reminder_threshold_secs`
-  连续活跃达到多少秒后触发提醒
-- `tray_enabled`
-  是否启用系统托盘
-- `record_window_titles`
-  是否记录窗口标题
-- `record_page_titles`
-  是否记录页面标题
-- `ignored_apps`
-  忽略的应用进程名列表
-- `ignored_domains`
-  忽略的域名列表
+- `database_path`：SQLite 路径
+- `lockfile_path`：单实例锁文件路径
+- `listen_addr`：HTTP 监听地址
+- `web_ui_url`：托盘打开 UI 的地址
+- `idle_threshold_secs`：多久无输入认为 idle
+- `poll_interval_millis`：后台轮询间隔
+- `health_reminder_enabled`：是否开启连续活跃提醒
+- `health_reminder_threshold_secs`：提醒触发阈值
+- `tray_enabled`：是否启用托盘
+- `record_window_titles`：是否记录窗口标题
+- `record_page_titles`：是否记录页面标题
+- `ignored_apps`：忽略应用名列表
+- `ignored_domains`：忽略域名列表
 
-## 打包便携版
+## 打包安装包
 
-仓库当前只保留便携包产物，不再生成安装器。
+前置条件：
 
-### 版本号单点维护
-
-项目以根目录 [Cargo.toml](Cargo.toml) 的 `[workspace.package].version` 作为唯一版本来源。
-
-同步命令：
+- Node.js / npm
+- Rust toolchain（`cargo`）
+- Inno Setup 6/7，并确保 `ISCC.exe` 可访问（PATH 或参数显式传入）
 
 ```powershell
-.\scripts\sync-version.ps1
+.\scripts\build-installer.ps1
 ```
 
-该脚本会把版本同步到：
-
-- `apps/web-ui/package.json`
-- `apps/web-ui/package-lock.json`
-- `apps/browser-extension/manifest.json`
-
-只校验不修改：
-
-```powershell
-.\scripts\sync-version.ps1 -CheckOnly
-```
-
-### 前置条件
-
-1. 安装 Node.js / npm
-2. 安装 Rust toolchain
-
-### 构建命令
-
-```powershell
-.\scripts\build-portable.ps1
-```
+输出位置：`target\installer\output\timeline-setup.exe`
 
 脚本会自动完成：
 
-1. 构建 `apps/web-ui/dist`
-2. 构建 `timeline.exe`
-3. 收集浏览器扩展目录
-4. 生成便携版 zip 包
+1. 编译 `apps/web-ui` 产物到 `apps/web-ui/dist`
+2. 编译 `timeline.exe`
+3. 组装安装文件
+4. 调用 Inno Setup 生成 `.exe` 安装包
 
-输出位置：
+## API 入口（本地）
 
-- `target\portable\output\timeline-portable-<version>.zip`
+所有接口返回统一信封：
 
-### 便携包布局
+- `GET /health`
+- `GET /api/timeline/day?date=YYYY-MM-DD`
+- `GET /api/stats/apps?date=YYYY-MM-DD`
+- `GET /api/stats/domains?date=YYYY-MM-DD`
+- `GET /api/stats/focus?date=YYYY-MM-DD`
+- `GET /api/settings`
+- `POST /api/settings/config`
+- `POST /api/settings/autostart`
+- `POST /api/events/browser`（扩展上报）
 
-- `timeline.exe`（稳定入口，启动器 + 后端双模式）
-- `config\timeline.toml`
-- `data\`
-- `web-ui\dist\`
-- `browser-extension\`
-- `versions\<version>\timeline.exe`
-- `versions\<version>\web-ui\dist\`
-- `versions\<version>\browser-extension\`
-- `current.json`（当前激活版本指针）
+## 常见问题
 
-便携包不再额外生成启动脚本，直接运行 `timeline.exe` 即可。启动器会根据 `current.json` 自动拉起当前版本后端。
+- `StartMenuExperienceHost.exe` 出现：这是 Windows 开始菜单宿主进程，不是本项目组件。
+- 看到“跨重启的 active 长段”：通常是历史异常收尾导致；最近实现会按最后一次真实观测时间补齐未关闭 segment，避免把关机空档误连。
+- 没有看到浏览器记录：确认浏览器扩展已加载、页面在该扩展允许上报路径下，并且后端有收到 `/api/events/browser` 请求。
 
-### 在线升级
-
-设置页现在提供“检查更新”和“升级并重启”入口。
-
-升级流程会：
-
-1. 请求 GitHub Release `latest`
-2. 下载最新的 `timeline-portable-*.zip`
-3. 将新版本写入 `versions\<new-version>\`
-4. 原子切换 `current.json`
-5. 自动重启 `timeline.exe` 并做健康检查
-6. 健康检查失败时自动回滚到上一个版本
-
-升级时会保留本地：
-
-- `config\timeline.toml`
-- `data\`
-
-也就是说，在线升级不会覆盖你的现有数据库和本地配置。
-
-## GitHub Actions
-
-仓库自带 Windows 打包工作流：
-
-- 支持手动触发
-- 在 GitHub Release 发布时自动触发
-- Release 场景会把便携版 `.zip` 挂到 Release assets
-
-## 常见说明
-
-### `StartMenuExperienceHost.exe` 是什么
-
-这是 Windows 的开始菜单宿主进程，属于系统组件。
-
-### 为什么会出现跨关机的 active 段
-
-旧数据里如果出现“关机期间仍然是 active”的长段，通常不是实时识别把关机误判成 active，而是历史上某次未正常收尾的 open segment 在下次启动时被错误补尾造成的。
-
-当前代码已经改成按“最后一次真实观测时间”收尾，新生成的数据不会再把关机空档桥接进去。
-
-## 目录参考
+## 目录一览
 
 ```text
-timeline/
+timeline-desktop/
 ├─ apps/
 │  ├─ browser-extension/
 │  ├─ timeline-backend/
 │  └─ web-ui/
-├─ config/
 ├─ crates/
+├─ config/
 ├─ docs/
-└─ scripts/
+├─ installer/
+├─ scripts/
+└─ .github/
 ```

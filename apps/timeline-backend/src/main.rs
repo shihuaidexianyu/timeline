@@ -8,11 +8,9 @@
 mod config;
 mod db;
 mod http;
-mod layout;
 mod state;
 mod system;
 mod trackers;
-mod updater;
 mod windows;
 
 use crate::config::AppConfig;
@@ -23,93 +21,21 @@ use anyhow::{Context, Result, anyhow};
 use fs2::FileExt;
 use std::env;
 use std::fs::OpenOptions;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
 use time::{OffsetDateTime, UtcOffset};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
-const BACKEND_MODE_FLAG: &str = "--backend";
-
-enum StartupMode {
-    Launcher { forwarded_args: Vec<String> },
-    Backend { backend_args: Vec<String> },
-    ApplyUpdate(updater::ApplyUpdateArgs),
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let raw_args: Vec<String> = env::args().skip(1).collect();
-    let result = match parse_startup_mode(&raw_args)? {
-        StartupMode::Launcher { forwarded_args } => run_launcher_mode(forwarded_args),
-        StartupMode::Backend { backend_args } => run_backend_mode(&backend_args).await,
-        StartupMode::ApplyUpdate(args) => updater::run_apply_update(args).await,
-    };
+    let result = run_backend_mode(&raw_args).await;
 
     if let Err(error) = &result {
         system::show_startup_error_dialog("Timeline 启动失败", &format!("{error:#}"));
     }
 
     result
-}
-
-fn parse_startup_mode(raw_args: &[String]) -> Result<StartupMode> {
-    if raw_args
-        .first()
-        .is_some_and(|argument| argument == updater::APPLY_UPDATE_MODE_FLAG)
-    {
-        return Ok(StartupMode::ApplyUpdate(updater::parse_apply_update_args(
-            &raw_args[1..],
-        )?));
-    }
-
-    if let Some(index) = raw_args
-        .iter()
-        .position(|argument| argument == BACKEND_MODE_FLAG)
-    {
-        let mut backend_args = raw_args.to_vec();
-        backend_args.remove(index);
-        return Ok(StartupMode::Backend { backend_args });
-    }
-
-    Ok(StartupMode::Launcher {
-        forwarded_args: raw_args.to_vec(),
-    })
-}
-
-fn run_launcher_mode(forwarded_args: Vec<String>) -> Result<()> {
-    let install_root = layout::resolve_install_root()?;
-    let backend_executable = layout::resolve_backend_executable(&install_root)
-        .or_else(|_| std::env::current_exe().context("failed to resolve launcher executable"))?;
-
-    let mut child_args = Vec::with_capacity(forwarded_args.len() + 1);
-    child_args.push(BACKEND_MODE_FLAG.to_string());
-    child_args.extend(forwarded_args);
-    ensure_default_config_arg(&mut child_args, &install_root);
-
-    let status = Command::new(&backend_executable)
-        .args(child_args)
-        .env(layout::INSTALL_ROOT_ENV, &install_root)
-        .current_dir(&install_root)
-        .status()
-        .with_context(|| {
-            format!(
-                "failed to launch backend executable {:?}",
-                backend_executable
-            )
-        })?;
-
-    std::process::exit(status.code().unwrap_or(1));
-}
-
-fn ensure_default_config_arg(child_args: &mut Vec<String>, install_root: &Path) {
-    if child_args.iter().any(|arg| arg == "--config") {
-        return;
-    }
-
-    let default_config = install_root.join("config").join("timeline.toml");
-    child_args.push("--config".to_string());
-    child_args.push(default_config.display().to_string());
 }
 
 async fn run_backend_mode(backend_args: &[String]) -> Result<()> {

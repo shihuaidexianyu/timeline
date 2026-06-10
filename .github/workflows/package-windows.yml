@@ -29,32 +29,6 @@ jobs:
           cache: npm
           cache-dependency-path: apps/web-ui/package-lock.json
 
-      - name: Verify version files are synchronized
-        shell: pwsh
-        run: .\scripts\sync-version.ps1 -CheckOnly
-
-      - name: Verify release tag matches workspace version
-        if: github.event_name == 'release' || github.event.inputs.release_tag != ''
-        shell: pwsh
-        run: |
-          $cargoToml = Join-Path $PWD 'Cargo.toml'
-          $content = Get-Content -LiteralPath $cargoToml -Raw
-          if ($content -notmatch '(?ms)^\[workspace\.package\]\s+.*?^version\s*=\s*"([^"]+)"') {
-            throw "Failed to parse [workspace.package].version from $cargoToml"
-          }
-          $workspaceVersion = $Matches[1]
-
-          $rawTag = if ('${{ github.event_name }}' -eq 'release') { '${{ github.event.release.tag_name }}' } else { '${{ github.event.inputs.release_tag }}' }
-          $normalizedTag = $rawTag -replace '^v', ''
-
-          if ([string]::IsNullOrWhiteSpace($rawTag)) {
-            throw 'Expected a release tag but none was provided.'
-          }
-
-          if ($normalizedTag -ne $workspaceVersion) {
-            throw "Release tag '$rawTag' does not match workspace version '$workspaceVersion'."
-          }
-
       - name: Install web-ui dependencies
         working-directory: apps/web-ui
         shell: pwsh
@@ -66,15 +40,32 @@ jobs:
           rustup toolchain install stable-x86_64-pc-windows-msvc --profile minimal
           rustup default stable-x86_64-pc-windows-msvc
 
-      - name: Build portable package
+      - name: Install Inno Setup
         shell: pwsh
-        run: .\scripts\build-portable.ps1
+        run: choco install innosetup --no-progress -y
 
-      - name: Upload portable package
+      - name: Build installer package
+        shell: pwsh
+        run: .\scripts\build-installer.ps1
+
+      - name: Generate checksums
+        shell: pwsh
+        run: |
+          $output = Join-Path $PWD 'target\installer\output\SHA256SUMS.txt'
+          $files = Get-ChildItem -LiteralPath (Join-Path $PWD 'target\installer\output') -Filter '*.exe'
+          $lines = foreach ($file in $files) {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
+            "$hash  $($file.Name)"
+          }
+          Set-Content -LiteralPath $output -Value $lines -Encoding UTF8
+
+      - name: Upload Windows release assets
         uses: actions/upload-artifact@v4
         with:
-          name: timeline-windows-portable
-          path: target/portable/output/*.zip
+          name: timeline-windows-release
+          path: |
+            target/installer/output/*.exe
+            target/installer/output/SHA256SUMS.txt
           if-no-files-found: error
 
       - name: Resolve release tag
@@ -95,9 +86,11 @@ jobs:
 
           "tag=$tag" >> $env:GITHUB_OUTPUT
 
-      - name: Attach portable package to GitHub Release
+      - name: Attach Windows release assets to GitHub Release
         if: steps.release_tag.outputs.tag != ''
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.release_tag.outputs.tag }}
-          files: target/portable/output/*.zip
+          files: |
+            target/installer/output/*.exe
+            target/installer/output/SHA256SUMS.txt

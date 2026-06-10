@@ -1,4 +1,4 @@
-# timeline-desktop
+# timeline
 
 一个面向 Windows 的本地个人活动时间线工具。项目包含 Rust 本地常驻服务、React + Vite 前端，以及 Chrome/Edge Manifest V3 浏览器扩展。所有数据默认保存在本地 SQLite，HTTP API 仅限 loopback 访问。
 
@@ -9,7 +9,7 @@
 ## 项目结构
 
 ```text
-timeline-desktop/
+timeline/
 ├── Cargo.toml                 # Workspace 根配置
 ├── apps/
 │   ├── timeline-backend/      # Rust 后端（包名 timeline，可执行文件 timeline.exe）

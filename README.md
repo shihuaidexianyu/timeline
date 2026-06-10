@@ -1,4 +1,4 @@
-# timeline-desktop
+# timeline
 
 一个面向 Windows 的本地活动时间线工具。它在本机记录应用前台状态、浏览器活跃域名与 idle/locked 状态，并把数据写入本地 SQLite，由本地 Web UI 展示为时间线与统计结果。
 
@@ -148,7 +148,7 @@ npm run dev
 ## 目录一览
 
 ```text
-timeline-desktop/
+timeline/
 ├─ apps/
 │  ├─ browser-extension/
 │  ├─ timeline-backend/

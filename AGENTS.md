@@ -28,8 +28,6 @@ timeline/
 │   └── timeline.iss           # Inno Setup 安装包脚本
 ├── config/
 │   └── timeline.example.toml  # 配置示例
-└── .github/workflows/
-    └── package-windows.yml    # GitHub Actions 打包工作流
 ```
 
 ---
@@ -206,14 +204,6 @@ CORS 限制：浏览器请求 Origin 必须是 loopback（`127.0.0.1`、`localho
 输出位置：`target/installer/output/timeline-setup.exe`
 
 该脚本会构建 `apps/web-ui/dist`、编译 `timeline.exe`、组装安装源目录，再调用 Inno Setup 打包。安装包是普通用户主入口。
-
-### GitHub Actions
-
-`.github/workflows/package-windows.yml`：
-- 在 Release `published` 时自动触发
-- 支持手动 `workflow_dispatch` 触发
-- 安装 Inno Setup 并调用 `build-installer.ps1`
-- 将 `.exe` 安装包和 `SHA256SUMS.txt` 上传到 Release assets
 
 ---
 

@@ -1,6 +1,7 @@
 //! Shared runtime state for open segments and global application dependencies.
 
 use crate::{config::AppConfig, db::AgentStore};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{
     Arc,
@@ -14,12 +15,14 @@ pub struct RuntimeState {
     pub current_focus: Option<OpenFocusSegment>,
     pub current_presence: Option<OpenPresenceSegment>,
     pub current_browser: Option<OpenBrowserSegment>,
+    pub current_visible_windows: BTreeMap<String, OpenVisibleWindowSegment>,
     pub health_reminder: HealthReminderRuntime,
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct MonitorTelemetry {
     pub focus_last_seen: Option<OffsetDateTime>,
+    pub visible_windows_last_seen: Option<OffsetDateTime>,
     pub presence_last_seen: Option<OffsetDateTime>,
     pub browser_last_seen: Option<OffsetDateTime>,
     pub tray_last_seen: Option<OffsetDateTime>,
@@ -44,6 +47,11 @@ pub struct OpenBrowserSegment {
     pub domain: String,
     pub browser_window_id: i64,
     pub tab_id: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenVisibleWindowSegment {
+    pub id: i64,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -167,6 +175,10 @@ impl AgentState {
 
     pub async fn mark_focus_online(&self, seen_at: OffsetDateTime) {
         self.inner.monitors.lock().await.focus_last_seen = Some(seen_at);
+    }
+
+    pub async fn mark_visible_windows_online(&self, seen_at: OffsetDateTime) {
+        self.inner.monitors.lock().await.visible_windows_last_seen = Some(seen_at);
     }
 
     pub async fn mark_presence_online(&self, seen_at: OffsetDateTime) {

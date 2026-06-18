@@ -9,6 +9,20 @@ test('stats page renders without invalid text', async ({ page }) => {
 
   await expect(page.getByRole('heading', { name: '统计概览' })).toBeVisible()
   await expect(page.getByRole('heading', { name: '应用趋势' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '可见窗口' })).toHaveClass(/is-active/)
+  await expect(page.getByText('可见窗口可并行累计')).toBeVisible()
+  await expect(page.locator('body')).not.toContainText(/NaN|undefined/)
+})
+
+test('stats app metric switches trend and distribution together', async ({ page }) => {
+  await page.goto('/#/stats')
+
+  await expect(page.getByText('Cursor').first()).toBeVisible()
+  await page.getByRole('button', { name: '前台焦点' }).click()
+
+  await expect(page.getByRole('button', { name: '前台焦点' })).toHaveClass(/is-active/)
+  await expect(page.getByText('可见窗口可并行累计')).toHaveCount(0)
+  await expect(page.getByText('Focus Only').first()).toBeVisible()
   await expect(page.locator('body')).not.toContainText(/NaN|undefined/)
 })
 
@@ -45,8 +59,19 @@ async function mockApi(page: Page) {
       return
     }
 
+    if (path === '/api/stats/apps') {
+      const metric = url.searchParams.get('metric') ?? 'focus'
+      await route.fulfill({
+        json: envelope(metric === 'visible_window' ? visibleAppStats : focusAppStats),
+      })
+      return
+    }
+
     if (path === '/api/stats/apps/trend') {
-      await route.fulfill({ json: envelope(appUsageTrend) })
+      const metric = url.searchParams.get('metric') ?? 'focus'
+      await route.fulfill({
+        json: envelope(metric === 'visible_window' ? visibleAppUsageTrend : focusAppUsageTrend),
+      })
       return
     }
 
@@ -143,8 +168,18 @@ const periodSummary = {
   month: { focus_seconds: 3600, active_seconds: 3600 },
 }
 
-const appUsageTrend = {
+const visibleAppStats = [
+  { key: 'cursor.exe', label: 'Cursor', seconds: 5400, percentage: 60 },
+  { key: 'Code.exe', label: 'Visual Studio Code', seconds: 3600, percentage: 40 },
+]
+
+const focusAppStats = [
+  { key: 'focus-only.exe', label: 'Focus Only', seconds: 3600, percentage: 100 },
+]
+
+const visibleAppUsageTrend = {
   period: 'week',
+  metric: 'visible_window',
   start_date: '2026-05-18',
   end_date: '2026-05-24',
   timezone: '+08:00',
@@ -159,6 +194,12 @@ const appUsageTrend = {
   ],
   series: [
     {
+      key: 'cursor.exe',
+      label: 'Cursor',
+      total_seconds: 5400,
+      daily_seconds: [0, 1800, 3600, 0, 0, 0, 0],
+    },
+    {
       key: 'Code.exe',
       label: 'Visual Studio Code',
       total_seconds: 3600,
@@ -169,6 +210,31 @@ const appUsageTrend = {
       label: 'Microsoft Edge',
       total_seconds: 1800,
       daily_seconds: [0, 1800, 0, 0, 0, 0, 0],
+    },
+  ],
+}
+
+const focusAppUsageTrend = {
+  period: 'week',
+  metric: 'focus',
+  start_date: '2026-05-18',
+  end_date: '2026-05-24',
+  timezone: '+08:00',
+  days: [
+    '2026-05-18',
+    '2026-05-19',
+    '2026-05-20',
+    '2026-05-21',
+    '2026-05-22',
+    '2026-05-23',
+    '2026-05-24',
+  ],
+  series: [
+    {
+      key: 'focus-only.exe',
+      label: 'Focus Only',
+      total_seconds: 3600,
+      daily_seconds: [0, 3600, 0, 0, 0, 0, 0],
     },
   ],
 }

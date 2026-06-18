@@ -8,6 +8,7 @@ import type {
   PeriodSummaryResponse,
   TimelineDayResponse,
   TrendPeriod,
+  UsageMetric,
   UpdateAgentConfigRequest,
   UpdateAgentConfigResponse,
   UpdateAutostartRequest,
@@ -119,19 +120,29 @@ export function getTimeline(date?: string, signal?: AbortSignal) {
   return request<TimelineDayResponse>(`/api/timeline/day${query}`, { signal })
 }
 
-export function getAppStats(date: string, signal?: AbortSignal) {
-  return request<DurationStat[]>(`/api/stats/apps?date=${date}`, { signal })
+export function getAppStats(
+  date: string,
+  metric: UsageMetric = 'focus',
+  signal?: AbortSignal,
+) {
+  const query = new URLSearchParams({
+    date,
+    metric,
+  })
+  return request<DurationStat[]>(`/api/stats/apps?${query}`, { signal })
 }
 
 export function getAppUsageTrend(
   date: string,
   period: TrendPeriod,
+  metric: UsageMetric = 'focus',
   limit = 6,
   signal?: AbortSignal,
 ) {
   const query = new URLSearchParams({
     date,
     period,
+    metric,
     limit: String(limit),
   })
   return request<AppUsageTrendResponse>(`/api/stats/apps/trend?${query}`, { signal })

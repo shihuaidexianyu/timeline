@@ -4,6 +4,7 @@ import { useHashRoute } from './page-route'
 import { useSelectedDateState } from './use-selected-date-state'
 import {
   useAgentSettingsQuery,
+  useAppStatsQuery,
   useAppUsageTrendQuery,
   useMonthCalendarQuery,
   usePeriodSummaryQuery,
@@ -13,6 +14,7 @@ import {
 } from '../shared/api'
 import {
   buildDashboardModel,
+  durationStatsToDonutSlices,
   type DashboardFilter,
 } from '../lib/chart-model'
 import {
@@ -24,7 +26,7 @@ import { useTheme } from '../hooks/use-theme'
 import { SettingsPage } from '../pages/settings-page'
 import { StatsPage } from '../pages/stats-page'
 import { TimelinePage } from '../pages/timeline-page'
-import type { TrendPeriod } from '../shared/api'
+import type { TrendPeriod, UsageMetric } from '../shared/api'
 import type { TimelineSegmentKind } from '../features/timeline/timeline-selectors'
 
 export function AppController() {
@@ -40,6 +42,8 @@ export function AppController() {
     useState<TimelineSegmentKind>('all')
   const [focusedSegmentId, setFocusedSegmentId] = useState<string | null>(null)
   const [appTrendPeriod, setAppTrendPeriod] = useState<TrendPeriod>('week')
+  const [appUsageMetric, setAppUsageMetric] =
+    useState<UsageMetric>('visible_window')
 
   const timelineQuery = useTimelineDayQuery(null)
   const timeline = timelineQuery.data ?? null
@@ -68,7 +72,16 @@ export function AppController() {
     : periodQuery.data
   const calendarQuery = useMonthCalendarQuery(dateState.calendarMonth)
   const appTrendDate = dateState.selectedDate ?? timeline?.date ?? null
-  const appTrendQuery = useAppUsageTrendQuery(appTrendDate, appTrendPeriod, 6, {
+  const appTrendQuery = useAppUsageTrendQuery(
+    appTrendDate,
+    appTrendPeriod,
+    appUsageMetric,
+    6,
+    {
+      enabled: page === 'stats' && appTrendDate !== null,
+    },
+  )
+  const appStatsQuery = useAppStatsQuery(appTrendDate, appUsageMetric, {
     enabled: page === 'stats' && appTrendDate !== null,
   })
   const updateConfigMutation = useUpdateAgentConfigMutation()
@@ -107,6 +120,14 @@ export function AppController() {
     () => (selectedTimeline ? buildDashboardModel(selectedTimeline, false) : null),
     [selectedTimeline],
   )
+  const appStatSlices = useMemo(
+    () => durationStatsToDonutSlices(appStatsQuery.data ?? [], 'app'),
+    [appStatsQuery.data],
+  )
+  const appStatTotalSeconds = useMemo(
+    () => (appStatsQuery.data ?? []).reduce((sum, item) => sum + item.seconds, 0),
+    [appStatsQuery.data],
+  )
   const timelineDashboard = useMemo(
     () =>
       selectedTimeline
@@ -141,6 +162,7 @@ export function AppController() {
 
   function selectDate(nextDate: string) {
     dateState.selectDate(nextDate)
+    setAppFilter(null)
     setDomainFilter(null)
     setFocusedSegmentId(null)
   }
@@ -179,6 +201,10 @@ export function AppController() {
               appTrend={appTrendQuery.data ?? null}
               appTrendPeriod={appTrendPeriod}
               setAppTrendPeriod={setAppTrendPeriod}
+              appUsageMetric={appUsageMetric}
+              setAppUsageMetric={setAppUsageMetric}
+              appStats={appStatSlices}
+              appStatsTotalSeconds={appStatTotalSeconds}
               calendarDays={calendarQuery.data?.days ?? []}
               calendarMonth={
                 dateState.calendarMonth ?? monthFromDate(resolvedSelectedDate)
@@ -195,8 +221,10 @@ export function AppController() {
                 selectedPeriodQuery.isFetching && Boolean(selectedPeriodSummary)
               }
               isAppTrendRefreshing={appTrendQuery.isFetching}
+              isAppStatsRefreshing={appStatsQuery.isFetching}
               isCalendarRefreshing={calendarQuery.isFetching}
               appTrendError={errorToNullableMessage(appTrendQuery.error)}
+              appStatsError={errorToNullableMessage(appStatsQuery.error)}
               onCalendarMonthChange={selectCalendarMonth}
               onSelectDate={selectDate}
             />

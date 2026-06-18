@@ -11,6 +11,7 @@
 `timeline` 在 Windows 本地记录：
 
 - 前台应用（进程名、应用显示名、可执行路径、可选窗口标题）
+- 当前输入桌面中实际露出的可见窗口（用于统计页应用趋势/应用分布默认口径）
 - 浏览器前台标签页的域名（通过浏览器扩展上报）
 - 设备使用状态：`active` / `idle` / `locked`
 
@@ -116,11 +117,11 @@ npm run dev
 
 - `main.rs` — 服务入口：解析参数、加载配置、获取单实例锁、初始化 SQLite、启动 tracker、托盘、HTTP 服务。
 - `config.rs` — TOML 配置加载、默认值、路径解析、运行时根目录发现、web-ui dist 目录搜索。
-- `trackers.rs` — focus / presence 轮询，以及浏览器事件合并逻辑。
-- `state.rs` — 全局运行时状态（`AgentState`，Arc 包裹），包含当前 focus/browser/presence segment、健康提醒状态、监视器心跳。
+- `trackers.rs` — focus / visible window / presence 轮询，以及浏览器事件合并逻辑。
+- `state.rs` — 全局运行时状态（`AgentState`，Arc 包裹），包含当前 focus/browser/presence/visible window segment、健康提醒状态、监视器心跳。
 - `db.rs` — SQLite 连接、迁移、读写模型、统计聚合、月历/周期汇总。
 - `http.rs` — Axum 路由、CORS/Origin 校验、统一 API 信封、设置接口、浏览器事件接收。
-- `windows.rs` — Win32 API 封装：前台窗口、idle 时长、工作站锁定检测。
+- `windows.rs` — Win32 API 封装：前台窗口、可见窗口、idle 时长、工作站锁定检测。
 - `system.rs` — 系统托盘、开机自启动注册表、toast 通知、打开前端 URL。
 
 ### 共享类型 (`crates/common/src/lib.rs`)
@@ -132,7 +133,7 @@ npm run dev
 - `TimelineDayResponse` / `DurationStat` / `FocusStats`
 - `AgentSettingsResponse` / `UpdateAgentConfigRequest` / `UpdateAutostartRequest`
 - `BrowserEventPayload` / `BrowserEventAck`
-- `DaySummary` / `MonthCalendarResponse` / `PeriodSummaryResponse`
+- `DaySummary` / `MonthCalendarResponse` / `PeriodSummaryResponse` / `UsageMetric`
 
 ### 前端 (`apps/web-ui/src/`)
 
@@ -157,8 +158,9 @@ npm run dev
 
 1. **Focus Tracker:** 每秒轮询 Windows 前台窗口（`GetForegroundWindow`），窗口指纹（`hwnd + process_id + window_title`）变化时结束旧 `focus_segment` 并创建新段。关闭窗口标题记录时，指纹退化为 `hwnd + process_id`。
 2. **Presence Tracker:** 每秒检测用户输入 idle 时长与工作站锁定状态，生成 `presence_segment`（状态：`active` / `idle` / `locked`）。`locked` 优先级高于 `idle`。
-3. **Browser Bridge:** 扩展仅在“当前聚焦的浏览器窗口”有活动标签页时，向 `/api/events/browser` 上报域名事件；后端仅在确认前台为浏览器时维护 `browser_segment`。相同 `domain + browser_window_id + tab_id` 连续事件会合并。
-4. **Web UI:** 通过日期查询 `focus_segments`、`browser_segments`、`presence_segments`，并渲染时间线与统计图表。
+3. **Visible Window Tracker:** 每秒枚举当前输入桌面的顶层窗口，排除最小化、不可见、DWM cloaked、工具窗口、空矩形窗口和忽略应用，按 z-order 扣除遮挡面积；可见面积比例大于 5% 的窗口写入 `visible_window_segments`，并增量维护 `daily_visible_app_usage`。锁屏会关闭当前可见窗口段；idle 不会停止计时。
+4. **Browser Bridge:** 扩展仅在“当前聚焦的浏览器窗口”有活动标签页时，向 `/api/events/browser` 上报域名事件；后端仅在确认前台为浏览器时维护 `browser_segment`。相同 `domain + browser_window_id + tab_id` 连续事件会合并。
+5. **Web UI:** 通过日期查询 `focus_segments`、`browser_segments`、`presence_segments` 和应用预聚合数据，并渲染时间线与统计图表。统计页应用趋势/应用分布默认使用可见窗口口径，可切换到前台焦点口径。
 
 ---
 
@@ -182,8 +184,8 @@ CORS 限制：浏览器请求 Origin 必须是 loopback（`127.0.0.1`、`localho
 
 - `GET /health`
 - `GET /api/timeline/day?date=YYYY-MM-DD`
-- `GET /api/stats/apps?date=YYYY-MM-DD`
-- `GET /api/stats/apps/trend?date=YYYY-MM-DD&period=week|month`
+- `GET /api/stats/apps?date=YYYY-MM-DD&metric=visible_window|focus`
+- `GET /api/stats/apps/trend?date=YYYY-MM-DD&period=week|month&metric=visible_window|focus`
 - `GET /api/stats/domains?date=YYYY-MM-DD`
 - `GET /api/stats/focus?date=YYYY-MM-DD`
 - `GET /api/stats/summary?date=YYYY-MM-DD`
@@ -200,7 +202,7 @@ CORS 限制：浏览器请求 Origin 必须是 loopback（`127.0.0.1`、`localho
 
 ## 数据库与迁移
 
-后端使用 SQLx + SQLite，表结构在 `db.rs` 的 `MIGRATIONS` 常量中定义。当前包含 6 个版本迁移：
+后端使用 SQLx + SQLite，表结构在 `db.rs` 的 `MIGRATIONS` 常量中定义。当前包含 7 个版本迁移：
 
 1. `create_core_tables` — 创建 `app_registry`、`focus_segments`、`browser_segments`、`presence_segments`、`raw_events`
 2. `create_indexes` — 为常用查询字段加索引
@@ -208,8 +210,9 @@ CORS 限制：浏览器请求 Origin 必须是 loopback（`127.0.0.1`、`localho
 4. `add_performance_indexes` — 增加时间范围与未关闭 segment 的复合索引
 5. `add_overlap_lookup_indexes` — 增加 `ended_at + started_at` 的跨天查询索引
 6. `create_daily_rollups` — 增加按本地日期预聚合的应用、域名和状态日汇总表
+7. `create_visible_window_rollups` — 增加 `visible_window_segments` 和 `daily_visible_app_usage`
 
-启动时会自动运行 `restore_unclosed_segments()`，将上次异常退出未关闭的 segment 按最后一次真实观测时间（`last_seen_at`）收尾，避免跨重启的长段。
+启动时会自动运行 `restore_unclosed_segments()`，将上次异常退出未关闭的 segment 按最后一次真实观测时间（`last_seen_at`）收尾，避免跨重启的长段。可见窗口历史不从旧焦点数据回填，新版启动后开始自然累积。
 
 `raw_events` 表 capped 在 50,000 行以内，仅用于本地调试。
 
@@ -340,11 +343,11 @@ npm run test:e2e  # E2E 测试
 
 - `apps/timeline-backend/src/main.rs` — 后端服务入口与启动流程
 - `apps/timeline-backend/src/config.rs` — TOML 配置加载、默认值、路径解析
-- `apps/timeline-backend/src/trackers.rs` — focus / presence 轮询与浏览器事件合并逻辑
+- `apps/timeline-backend/src/trackers.rs` — focus / visible window / presence 轮询与浏览器事件合并逻辑
 - `apps/timeline-backend/src/state.rs` — 全局运行时状态（Arc 包裹）
 - `apps/timeline-backend/src/db.rs` — SQLite 连接、迁移、读写模型
 - `apps/timeline-backend/src/http.rs` — Axum 路由与 CORS/Origin 校验
-- `apps/timeline-backend/src/windows.rs` — Win32 API 封装（前台窗口、idle 检测）
+- `apps/timeline-backend/src/windows.rs` — Win32 API 封装（前台窗口、可见窗口、idle 检测）
 - `apps/timeline-backend/src/system.rs` — 托盘、自启动注册表、toast 通知
 - `crates/common/src/lib.rs` — 共享 API 类型（envelope、segment、settings 等）
 - `apps/browser-extension/service-worker.js` — 扩展核心逻辑（标签页缓存、心跳、上报）

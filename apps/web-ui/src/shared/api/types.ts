@@ -138,6 +138,8 @@ export type PeriodSummaryResponse = {
 
 export type TrendPeriod = 'week' | 'month'
 
+export type UsageMetric = 'focus' | 'visible_window'
+
 export type AppUsageTrendSeries = {
   key: string
   label: string
@@ -147,6 +149,7 @@ export type AppUsageTrendSeries = {
 
 export type AppUsageTrendResponse = {
   period: TrendPeriod
+  metric: UsageMetric
   start_date: string
   end_date: string
   timezone: string

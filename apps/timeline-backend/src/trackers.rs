@@ -1,13 +1,18 @@
 //! Background polling loops that turn Windows observations into persisted segments.
 
 use crate::state::{
-    AgentState, OpenBrowserSegment, OpenFocusSegment, OpenPresenceSegment, RuntimeConfigSnapshot,
+    AgentState, OpenBrowserSegment, OpenFocusSegment, OpenPresenceSegment,
+    OpenVisibleWindowSegment, RuntimeConfigSnapshot,
 };
 use crate::system;
-use crate::windows::{ForegroundWindowSnapshot, capture_foreground_window, detect_presence};
+use crate::windows::{
+    ForegroundWindowSnapshot, VISIBLE_WINDOW_MIN_RATIO, VisibleWindowSnapshot,
+    capture_foreground_window, capture_visible_windows, detect_presence,
+};
 use anyhow::Result;
 use common::{AppInfo, PresenceState};
 use serde::Serialize;
+use std::collections::BTreeMap;
 use std::time::Duration;
 use time::OffsetDateTime;
 use tokio::time::sleep;
@@ -18,6 +23,13 @@ pub fn spawn_trackers(state: AgentState) {
     tokio::spawn(async move {
         if let Err(error) = run_focus_tracker(focus_state).await {
             error!(?error, "focus tracker stopped");
+        }
+    });
+
+    let visible_state = state.clone();
+    tokio::spawn(async move {
+        if let Err(error) = run_visible_window_tracker(visible_state).await {
+            error!(?error, "visible window tracker stopped");
         }
     });
 
@@ -39,6 +51,23 @@ async fn run_focus_tracker(state: AgentState) -> Result<()> {
                 sync_focus_snapshot(&state, snapshot, observed_at, &runtime_config).await?
             }
             Err(error) => warn!(?error, "failed to read foreground window"),
+        }
+
+        sleep(Duration::from_millis(runtime_config.poll_interval_millis)).await;
+    }
+}
+
+async fn run_visible_window_tracker(state: AgentState) -> Result<()> {
+    loop {
+        let runtime_config = state.runtime_config_snapshot().await;
+        let observed_at = OffsetDateTime::now_utc();
+        state.mark_visible_windows_online(observed_at).await;
+
+        match capture_visible_windows(runtime_config.record_window_titles) {
+            Ok(snapshots) => {
+                sync_visible_windows(&state, snapshots, observed_at, &runtime_config).await?
+            }
+            Err(error) => warn!(?error, "failed to read visible windows"),
         }
 
         sleep(Duration::from_millis(runtime_config.poll_interval_millis)).await;
@@ -177,6 +206,114 @@ async fn sync_focus_snapshot(
     }
 
     Ok(())
+}
+
+async fn sync_visible_windows(
+    state: &AgentState,
+    snapshots: Vec<VisibleWindowSnapshot>,
+    observed_at: OffsetDateTime,
+    runtime_config: &RuntimeConfigSnapshot,
+) -> Result<()> {
+    let next_windows = trackable_visible_windows(snapshots, runtime_config);
+    let (to_close, to_touch, to_open) = {
+        let runtime = state.runtime().await;
+        let to_close = runtime
+            .current_visible_windows
+            .iter()
+            .filter_map(|(key, current)| {
+                if next_windows.contains_key(key) {
+                    None
+                } else {
+                    Some((key.clone(), current.id))
+                }
+            })
+            .collect::<Vec<_>>();
+        let to_touch = next_windows
+            .iter()
+            .filter_map(|(key, snapshot)| {
+                runtime
+                    .current_visible_windows
+                    .get(key)
+                    .map(|current| (key.clone(), current.id, snapshot.visible_area_ratio))
+            })
+            .collect::<Vec<_>>();
+        let to_open = next_windows
+            .iter()
+            .filter_map(|(key, snapshot)| {
+                if runtime.current_visible_windows.contains_key(key) {
+                    None
+                } else {
+                    Some((key.clone(), snapshot.clone()))
+                }
+            })
+            .collect::<Vec<_>>();
+
+        (to_close, to_touch, to_open)
+    };
+
+    for (_, id) in &to_close {
+        state
+            .store()
+            .end_visible_window_segment(*id, observed_at)
+            .await?;
+    }
+
+    for (_, id, visible_area_ratio) in &to_touch {
+        state
+            .store()
+            .touch_visible_window_segment(*id, observed_at, *visible_area_ratio)
+            .await?;
+    }
+
+    let mut opened = Vec::new();
+    for (key, snapshot) in to_open {
+        let display_name = display_name_for_process(&snapshot.process_name);
+        let window = crate::db::VisibleWindowSegmentInput {
+            process_name: snapshot.process_name.clone(),
+            display_name: display_name.clone(),
+            exe_path: Some(snapshot.exe_path.clone()),
+            window_title: if runtime_config.record_window_titles {
+                snapshot.window_title.clone()
+            } else {
+                None
+            },
+            hwnd: snapshot.hwnd as i64,
+            process_id: snapshot.process_id,
+            visible_area_ratio: snapshot.visible_area_ratio,
+        };
+
+        state
+            .store()
+            .upsert_app_registry(&window.process_name, &window.display_name, observed_at)
+            .await?;
+        let id = state
+            .store()
+            .start_visible_window_segment(&window, observed_at)
+            .await?;
+        opened.push((key, OpenVisibleWindowSegment { id }));
+    }
+
+    let mut runtime = state.runtime().await;
+    for (key, _) in to_close {
+        runtime.current_visible_windows.remove(&key);
+    }
+    for (key, current) in opened {
+        runtime.current_visible_windows.insert(key, current);
+    }
+
+    Ok(())
+}
+
+fn trackable_visible_windows(
+    snapshots: Vec<VisibleWindowSnapshot>,
+    runtime_config: &RuntimeConfigSnapshot,
+) -> BTreeMap<String, VisibleWindowSnapshot> {
+    snapshots
+        .into_iter()
+        .filter(|snapshot| snapshot.visible_area_ratio > VISIBLE_WINDOW_MIN_RATIO)
+        .filter(|snapshot| !is_ignored_app(runtime_config, &snapshot.process_name))
+        .map(|snapshot| (snapshot.key(), snapshot))
+        .collect()
 }
 
 async fn sync_presence_state(
@@ -485,7 +622,9 @@ fn title_case_word(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::browser_payload_for_storage;
+    use super::{browser_payload_for_storage, trackable_visible_windows};
+    use crate::state::RuntimeConfigSnapshot;
+    use crate::windows::VisibleWindowSnapshot;
 
     fn browser_payload(page_title: Option<&str>) -> common::BrowserEventPayload {
         common::BrowserEventPayload {
@@ -494,6 +633,31 @@ mod tests {
             browser_window_id: 1,
             tab_id: 2,
             observed_at: None,
+        }
+    }
+
+    fn runtime_config() -> RuntimeConfigSnapshot {
+        RuntimeConfigSnapshot {
+            idle_threshold_secs: 300,
+            poll_interval_millis: 1000,
+            health_reminder_enabled: true,
+            health_reminder_threshold_secs: 3000,
+            record_window_titles: true,
+            record_page_titles: true,
+            ignored_apps: vec!["ignored.exe".to_string()],
+            ignored_domains: Vec::new(),
+        }
+    }
+
+    fn visible_snapshot(process_name: &str, ratio: f64) -> VisibleWindowSnapshot {
+        VisibleWindowSnapshot {
+            hwnd: 100,
+            process_id: 200,
+            session_id: 1,
+            process_name: process_name.to_string(),
+            exe_path: format!(r"C:\Apps\{process_name}"),
+            window_title: Some("Window".to_string()),
+            visible_area_ratio: ratio,
         }
     }
 
@@ -509,5 +673,23 @@ mod tests {
         let payload = browser_payload_for_storage(browser_payload(Some("Useful page")), true);
 
         assert_eq!(payload.page_title.as_deref(), Some("Useful page"));
+    }
+
+    #[test]
+    fn trackable_visible_windows_filter_ignored_and_tiny_windows() {
+        let windows = vec![
+            visible_snapshot("code.exe", 0.5),
+            visible_snapshot("ignored.exe", 0.9),
+            visible_snapshot("tiny.exe", 0.05),
+        ];
+
+        let result = trackable_visible_windows(windows, &runtime_config());
+
+        assert_eq!(result.len(), 1);
+        assert!(
+            result
+                .values()
+                .any(|window| window.process_name == "code.exe")
+        );
     }
 }

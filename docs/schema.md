@@ -33,6 +33,21 @@
 - `ended_at`
 - `last_seen_at`：最后一次真实观测到该状态仍然有效的时间
 
+## `visible_window_segments`
+
+按窗口级别记录当前输入桌面中实际露出的顶层窗口片段。历史 `focus_segments` 不会回填到该表，新版本启动后才开始产生数据。
+
+- `process_name`
+- `display_name`
+- `exe_path`
+- `window_title`
+- `hwnd`
+- `process_id`
+- `visible_area_ratio`：最近一次观测到的可见面积比例
+- `started_at`
+- `ended_at`
+- `last_seen_at`：最后一次真实观测到该窗口仍然可见的时间，用于异常退出后的安全收尾
+
 ## `raw_events`
 
 - `kind`
@@ -43,13 +58,26 @@
 
 ## `daily_app_usage`
 
-按本地日期预聚合应用使用时长，供统计页、月历和应用趋势图快速读取。
+按本地日期预聚合前台焦点应用使用时长，供旧版统计口径、月历和焦点趋势快速读取。
 
 - `date`：本地日期，格式为 `YYYY-MM-DD`
 - `process_name`
 - `display_name`
 - `seconds`：该日期内累计应用前台时长
 - `segment_count`：该日期内覆盖到的应用片段数量
+- `updated_at`
+
+主键：`(date, process_name)`。
+
+## `daily_visible_app_usage`
+
+按本地日期预聚合可见窗口应用使用时长，供统计页应用分布和应用趋势图快速读取。同一时间多个可见窗口会分别累计，按应用汇总后总和可能超过活跃时长。
+
+- `date`：本地日期，格式为 `YYYY-MM-DD`
+- `process_name`
+- `display_name`
+- `seconds`：该日期内累计可见窗口时长
+- `segment_count`：该日期内覆盖到的可见窗口片段数量
 - `updated_at`
 
 主键：`(date, process_name)`。
@@ -98,3 +126,4 @@
 4. `add_performance_indexes`
 5. `add_overlap_lookup_indexes`
 6. `create_daily_rollups`
+7. `create_visible_window_rollups`

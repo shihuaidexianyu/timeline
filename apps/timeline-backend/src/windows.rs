@@ -1,4 +1,4 @@
-//! Windows-specific helpers for reading foreground window and user presence.
+//! Windows-specific helpers for reading foreground/visible windows and user presence.
 
 use anyhow::{Context, Result};
 use common::PresenceState;
@@ -7,7 +7,8 @@ use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
 use std::time::Duration;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, RECT};
+use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
 use windows::Win32::System::StationsAndDesktops::{
     CloseDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_READOBJECTS, GetUserObjectInformationW, HDESK,
@@ -19,10 +20,14 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-    IsWindowVisible,
+    EnumWindows, GWL_EXSTYLE, GetForegroundWindow, GetSystemMetrics, GetWindowLongPtrW,
+    GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+    IsWindowVisible, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    WS_EX_TOOLWINDOW,
 };
-use windows::core::PWSTR;
+use windows::core::{BOOL, PWSTR};
+
+pub const VISIBLE_WINDOW_MIN_RATIO: f64 = 0.05;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ForegroundWindowSnapshot {
@@ -33,6 +38,63 @@ pub struct ForegroundWindowSnapshot {
     pub exe_path: String,
     pub window_title: Option<String>,
     pub is_browser: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct VisibleWindowSnapshot {
+    pub hwnd: isize,
+    pub process_id: u32,
+    pub session_id: u32,
+    pub process_name: String,
+    pub exe_path: String,
+    pub window_title: Option<String>,
+    pub visible_area_ratio: f64,
+}
+
+impl VisibleWindowSnapshot {
+    pub fn key(&self) -> String {
+        format!("{}:{}", self.hwnd, self.process_id)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ScreenRect {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+impl ScreenRect {
+    fn from_rect(rect: RECT) -> Option<Self> {
+        Self::new(rect.left, rect.top, rect.right, rect.bottom)
+    }
+
+    fn new(left: i32, top: i32, right: i32, bottom: i32) -> Option<Self> {
+        if right <= left || bottom <= top {
+            return None;
+        }
+
+        Some(Self {
+            left,
+            top,
+            right,
+            bottom,
+        })
+    }
+
+    fn area(self) -> i64 {
+        i64::from(self.right - self.left) * i64::from(self.bottom - self.top)
+    }
+
+    fn intersect(self, other: Self) -> Option<Self> {
+        Self::new(
+            self.left.max(other.left),
+            self.top.max(other.top),
+            self.right.min(other.right),
+            self.bottom.min(other.bottom),
+        )
+    }
 }
 
 impl ForegroundWindowSnapshot {
@@ -90,6 +152,77 @@ pub fn capture_foreground_window(
     }))
 }
 
+pub fn capture_visible_windows(include_window_title: bool) -> Result<Vec<VisibleWindowSnapshot>> {
+    if is_workstation_locked()? {
+        return Ok(Vec::new());
+    }
+
+    let virtual_screen = virtual_screen_rect();
+    let mut covered_rects = Vec::new();
+    let mut snapshots = Vec::new();
+
+    for hwnd in enumerate_top_level_windows()? {
+        if !is_visible_window_candidate(hwnd) {
+            continue;
+        }
+
+        let Some(window_rect) = window_rect(hwnd) else {
+            continue;
+        };
+        let Some(clipped_rect) = window_rect.intersect(virtual_screen) else {
+            continue;
+        };
+
+        let visible_area = visible_area_after_occlusion(clipped_rect, &covered_rects);
+        covered_rects.push(clipped_rect);
+
+        let total_area = clipped_rect.area();
+        if total_area <= 0 {
+            continue;
+        }
+
+        let visible_area_ratio = visible_area as f64 / total_area as f64;
+        if visible_area_ratio <= VISIBLE_WINDOW_MIN_RATIO {
+            continue;
+        }
+
+        let mut process_id = 0u32;
+        unsafe {
+            GetWindowThreadProcessId(hwnd, Some(&mut process_id));
+        }
+        if process_id == 0 {
+            continue;
+        }
+
+        let Ok(exe_path) = read_process_path(process_id) else {
+            continue;
+        };
+        let process_name = Path::new(&exe_path)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("unknown.exe")
+            .to_string();
+        let session_id = read_session_id(process_id).unwrap_or_default();
+        let window_title = if include_window_title {
+            read_window_title(hwnd)
+        } else {
+            None
+        };
+
+        snapshots.push(VisibleWindowSnapshot {
+            hwnd: hwnd.0 as isize,
+            process_id,
+            session_id,
+            process_name,
+            exe_path,
+            window_title,
+            visible_area_ratio,
+        });
+    }
+
+    Ok(snapshots)
+}
+
 pub fn detect_presence(idle_threshold: Duration) -> Result<PresenceState> {
     if is_workstation_locked()? {
         return Ok(PresenceState::Locked);
@@ -101,6 +234,129 @@ pub fn detect_presence(idle_threshold: Duration) -> Result<PresenceState> {
     } else {
         Ok(PresenceState::Active)
     }
+}
+
+fn enumerate_top_level_windows() -> Result<Vec<HWND>> {
+    unsafe extern "system" fn collect_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let windows = unsafe { &mut *(lparam.0 as *mut Vec<HWND>) };
+        windows.push(hwnd);
+        true.into()
+    }
+
+    let mut windows = Vec::new();
+    unsafe {
+        EnumWindows(
+            Some(collect_window),
+            LPARAM((&mut windows as *mut Vec<HWND>) as isize),
+        )
+        .context("EnumWindows failed")?;
+    }
+
+    Ok(windows)
+}
+
+fn is_visible_window_candidate(hwnd: HWND) -> bool {
+    if hwnd.0.is_null() {
+        return false;
+    }
+
+    if !unsafe { IsWindowVisible(hwnd).as_bool() } {
+        return false;
+    }
+
+    if unsafe { IsIconic(hwnd).as_bool() } {
+        return false;
+    }
+
+    if is_tool_window(hwnd) || is_dwm_cloaked(hwnd) {
+        return false;
+    }
+
+    true
+}
+
+fn is_tool_window(hwnd: HWND) -> bool {
+    let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    (ex_style & WS_EX_TOOLWINDOW.0 as isize) != 0
+}
+
+fn is_dwm_cloaked(hwnd: HWND) -> bool {
+    let mut cloaked = 0u32;
+    let result = unsafe {
+        DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED,
+            (&mut cloaked as *mut u32).cast(),
+            std::mem::size_of::<u32>() as u32,
+        )
+    };
+
+    result.is_ok() && cloaked != 0
+}
+
+fn window_rect(hwnd: HWND) -> Option<ScreenRect> {
+    let mut rect = RECT::default();
+    unsafe {
+        GetWindowRect(hwnd, &mut rect).ok()?;
+    }
+
+    ScreenRect::from_rect(rect)
+}
+
+fn virtual_screen_rect() -> ScreenRect {
+    let left = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
+    let top = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
+    let width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
+    let height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
+
+    ScreenRect::new(left, top, left + width, top + height).unwrap_or(ScreenRect {
+        left: 0,
+        top: 0,
+        right: 1,
+        bottom: 1,
+    })
+}
+
+fn visible_area_after_occlusion(rect: ScreenRect, covered_rects: &[ScreenRect]) -> i64 {
+    let mut visible_parts = vec![rect];
+
+    for cover in covered_rects {
+        let mut next_parts = Vec::new();
+        for part in visible_parts {
+            next_parts.extend(subtract_rect(part, *cover));
+        }
+        visible_parts = next_parts;
+
+        if visible_parts.is_empty() {
+            return 0;
+        }
+    }
+
+    visible_parts.into_iter().map(ScreenRect::area).sum()
+}
+
+fn subtract_rect(source: ScreenRect, cover: ScreenRect) -> Vec<ScreenRect> {
+    let Some(overlap) = source.intersect(cover) else {
+        return vec![source];
+    };
+
+    let mut pieces = Vec::with_capacity(4);
+
+    if let Some(top) = ScreenRect::new(source.left, source.top, source.right, overlap.top) {
+        pieces.push(top);
+    }
+    if let Some(bottom) = ScreenRect::new(source.left, overlap.bottom, source.right, source.bottom)
+    {
+        pieces.push(bottom);
+    }
+    if let Some(left) = ScreenRect::new(source.left, overlap.top, overlap.left, overlap.bottom) {
+        pieces.push(left);
+    }
+    if let Some(right) = ScreenRect::new(overlap.right, overlap.top, source.right, overlap.bottom) {
+        pieces.push(right);
+    }
+
+    pieces
 }
 
 /// Reads how long since the last keyboard/mouse input using Win32 tick counts.
@@ -217,6 +473,51 @@ fn is_browser_process(process_name: &str) -> bool {
         process_name.to_ascii_lowercase().as_str(),
         "chrome.exe" | "msedge.exe" | "firefox.exe" | "brave.exe"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ScreenRect, visible_area_after_occlusion};
+
+    fn rect(left: i32, top: i32, right: i32, bottom: i32) -> ScreenRect {
+        ScreenRect::new(left, top, right, bottom).expect("valid rect")
+    }
+
+    #[test]
+    fn visible_area_keeps_side_by_side_windows_fully_visible() {
+        let left = rect(0, 0, 100, 100);
+        let right = rect(100, 0, 200, 100);
+
+        assert_eq!(visible_area_after_occlusion(left, &[right]), 10_000);
+    }
+
+    #[test]
+    fn visible_area_removes_fully_covered_window() {
+        let lower = rect(0, 0, 100, 100);
+        let upper = rect(0, 0, 100, 100);
+
+        assert_eq!(visible_area_after_occlusion(lower, &[upper]), 0);
+    }
+
+    #[test]
+    fn visible_area_subtracts_partial_occlusion() {
+        let lower = rect(0, 0, 100, 100);
+        let upper = rect(50, 0, 100, 100);
+
+        assert_eq!(visible_area_after_occlusion(lower, &[upper]), 5_000);
+    }
+
+    #[test]
+    fn visible_area_handles_multiple_overlapping_covers() {
+        let lower = rect(0, 0, 100, 100);
+        let upper_left = rect(0, 0, 50, 50);
+        let upper_right = rect(50, 0, 100, 100);
+
+        assert_eq!(
+            visible_area_after_occlusion(lower, &[upper_left, upper_right]),
+            2_500
+        );
+    }
 }
 
 /// RAII wrapper that closes a Win32 HANDLE on drop.

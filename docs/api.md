@@ -33,11 +33,21 @@
 
 返回某一天的 `focus_segments`、`browser_segments` 和 `presence_segments`。
 
-## `GET /api/stats/apps?date=2026-03-21`
+## `GET /api/stats/apps?date=2026-03-21&metric=visible_window`
 
 按应用聚合当天总时长。
 
-## `GET /api/stats/apps/trend?date=2026-03-21&period=week&limit=6`
+查询参数：
+
+- `date`：日期，格式为 `YYYY-MM-DD`；省略时使用本地服务时区下的今天
+- `metric`：`visible_window` 或 `focus`。省略时为 `focus`，用于兼容旧客户端；当前 Web UI 默认使用 `visible_window`
+
+口径说明：
+
+- `visible_window`：按当前输入桌面中实际露出的可见窗口累计。同一时间多个窗口可并行计时，因此总和可能超过活跃时长
+- `focus`：按传统前台焦点窗口累计，同一时刻只有一个前台应用计时
+
+## `GET /api/stats/apps/trend?date=2026-03-21&period=week&limit=6&metric=visible_window`
 
 返回以指定日期为锚点的应用使用趋势，用于周/月折线图。
 
@@ -46,10 +56,12 @@
 - `date`：锚点日期，格式为 `YYYY-MM-DD`；省略时使用本地服务时区下的今天
 - `period`：`week` 或 `month`，省略时为 `week`
 - `limit`：返回前 N 个应用，当前后端会限制在 `1..=12`
+- `metric`：`visible_window` 或 `focus`。省略时为 `focus`，用于兼容旧客户端；当前 Web UI 默认使用 `visible_window`
 
 响应字段：
 
 - `period`
+- `metric`
 - `start_date`
 - `end_date`
 - `timezone`

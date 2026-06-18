@@ -15,7 +15,7 @@ use common::{
     AgentMonitorStatus, AgentSettingsResponse, ApiResponse, AppUsageTrendResponse,
     BrowserEventPayload, HealthResponse, MonthCalendarResponse, PeriodSummaryResponse, TrendPeriod,
     UpdateAgentConfigRequest, UpdateAgentConfigResponse, UpdateAutostartRequest,
-    UpdateAutostartResponse,
+    UpdateAutostartResponse, UsageMetric,
 };
 use serde::Deserialize;
 use time::format_description::parse;
@@ -62,6 +62,7 @@ pub fn build_router(state: AgentState) -> Router {
 #[derive(Debug, Deserialize)]
 struct DayQuery {
     date: Option<String>,
+    metric: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,6 +70,7 @@ struct AppTrendQuery {
     date: Option<String>,
     period: Option<String>,
     limit: Option<usize>,
+    metric: Option<String>,
 }
 
 async fn get_health(
@@ -101,7 +103,11 @@ async fn get_app_stats(
     Query(query): Query<DayQuery>,
 ) -> Result<Json<ApiResponse<Vec<common::DurationStat>>>, AppError> {
     let date = parse_or_today(query.date.as_deref(), state.timezone())?;
-    let stats = state.store().read_app_stats(date, state.timezone()).await?;
+    let metric = parse_usage_metric(query.metric.as_deref())?;
+    let stats = state
+        .store()
+        .read_app_stats(date, state.timezone(), metric)
+        .await?;
     Ok(Json(ApiResponse::ok(stats)))
 }
 
@@ -111,9 +117,10 @@ async fn get_app_usage_trend(
 ) -> Result<Json<ApiResponse<AppUsageTrendResponse>>, AppError> {
     let date = parse_or_today(query.date.as_deref(), state.timezone())?;
     let period = parse_trend_period(query.period.as_deref())?;
+    let metric = parse_usage_metric(query.metric.as_deref())?;
     let trend = state
         .store()
-        .read_app_usage_trend(date, period, query.limit.unwrap_or(6))
+        .read_app_usage_trend(date, period, query.limit.unwrap_or(6), metric)
         .await?;
     Ok(Json(ApiResponse::ok(trend)))
 }
@@ -287,6 +294,17 @@ fn parse_trend_period(value: Option<&str>) -> Result<TrendPeriod, AppError> {
     }
 }
 
+fn parse_usage_metric(value: Option<&str>) -> Result<UsageMetric, AppError> {
+    match value.unwrap_or("focus") {
+        "focus" => Ok(UsageMetric::Focus),
+        "visible_window" => Ok(UsageMetric::VisibleWindow),
+        _ => Err(AppError::bad_request(
+            "invalid_metric",
+            "metric must be focus or visible_window",
+        )),
+    }
+}
+
 /// Parses a "YYYY-MM" string into (year, Month), defaulting to the current month.
 fn parse_or_current_month(
     value: Option<&str>,
@@ -423,6 +441,14 @@ async fn build_monitor_statuses(state: &AgentState) -> Vec<AgentMonitorStatus> {
             "轮询前台应用和窗口标题",
         ),
         monitor_status(
+            "visible_window_tracker",
+            "可见窗口监视器",
+            telemetry.visible_windows_last_seen,
+            poll_window,
+            now,
+            "枚举当前桌面实际露出的窗口",
+        ),
+        monitor_status(
             "presence_tracker",
             "Presence 监视器",
             telemetry.presence_last_seen,
@@ -516,6 +542,7 @@ fn sanitize_list(items: Vec<String>) -> Vec<String> {
     values
 }
 
+#[derive(Debug)]
 struct AppError {
     status: StatusCode,
     code: &'static str,
@@ -575,9 +602,10 @@ impl IntoResponse for AppError {
 mod tests {
     use super::{
         EXTENSION_HEADER, EXTENSION_HEADER_VALUE, has_extension_header, is_allowed_browser_origin,
-        is_allowed_loopback_origin,
+        is_allowed_loopback_origin, parse_usage_metric,
     };
     use axum::http::{HeaderMap, HeaderValue};
+    use common::UsageMetric;
 
     #[test]
     fn allows_loopback_http_origins() {
@@ -637,5 +665,23 @@ mod tests {
         headers.insert(EXTENSION_HEADER, HeaderValue::from_static("wrong"));
 
         assert!(!has_extension_header(&headers));
+    }
+
+    #[test]
+    fn usage_metric_defaults_to_focus_for_compatibility() {
+        assert_eq!(parse_usage_metric(None).unwrap(), UsageMetric::Focus);
+    }
+
+    #[test]
+    fn usage_metric_accepts_visible_window() {
+        assert_eq!(
+            parse_usage_metric(Some("visible_window")).unwrap(),
+            UsageMetric::VisibleWindow
+        );
+    }
+
+    #[test]
+    fn usage_metric_rejects_unknown_values() {
+        assert!(parse_usage_metric(Some("active")).is_err());
     }
 }

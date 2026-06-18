@@ -6,6 +6,7 @@ import {
 } from '@tanstack/react-query'
 import {
   getAgentSettings,
+  getAppStats,
   getAppUsageTrend,
   getMonthCalendar,
   getPeriodSummary,
@@ -16,6 +17,7 @@ import {
 import type {
   AgentSettingsResponse,
   TrendPeriod,
+  UsageMetric,
   UpdateAgentConfigRequest,
   UpdateAutostartRequest,
 } from './types'
@@ -28,8 +30,11 @@ export const apiQueryKeys = {
   appUsageTrend: (
     date: string | null | undefined,
     period: TrendPeriod,
+    metric: UsageMetric,
     limit: number,
-  ) => ['app-usage-trend', date ?? 'none', period, limit] as const,
+  ) => ['app-usage-trend', date ?? 'none', period, metric, limit] as const,
+  appStats: (date: string | null | undefined, metric: UsageMetric) =>
+    ['app-stats', date ?? 'none', metric] as const,
   monthCalendar: (month: string | null | undefined) =>
     ['month-calendar', month ?? 'none'] as const,
   agentSettings: () => ['agent-settings'] as const,
@@ -68,14 +73,31 @@ export function usePeriodSummaryQuery(
 export function useAppUsageTrendQuery(
   date: string | null | undefined,
   period: TrendPeriod,
+  metric: UsageMetric,
   limit = 6,
   options?: QueryHookOptions,
 ) {
   const { enabled, ...queryOptions } = options ?? {}
 
   return useQuery({
-    queryKey: apiQueryKeys.appUsageTrend(date, period, limit),
-    queryFn: ({ signal }) => getAppUsageTrend(date ?? '', period, limit, signal),
+    queryKey: apiQueryKeys.appUsageTrend(date, period, metric, limit),
+    queryFn: ({ signal }) => getAppUsageTrend(date ?? '', period, metric, limit, signal),
+    enabled: Boolean(date) && (enabled ?? true),
+    placeholderData: keepPreviousData,
+    ...queryOptions,
+  })
+}
+
+export function useAppStatsQuery(
+  date: string | null | undefined,
+  metric: UsageMetric,
+  options?: QueryHookOptions,
+) {
+  const { enabled, ...queryOptions } = options ?? {}
+
+  return useQuery({
+    queryKey: apiQueryKeys.appStats(date, metric),
+    queryFn: ({ signal }) => getAppStats(date ?? '', metric, signal),
     enabled: Boolean(date) && (enabled ?? true),
     placeholderData: keepPreviousData,
     ...queryOptions,

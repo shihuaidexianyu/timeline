@@ -4,6 +4,7 @@ import type {
     DaySummary,
     PeriodSummaryResponse,
     TrendPeriod,
+    UsageMetric,
 } from '../api'
 import { AppUsageTrendChart } from '../components/app-usage-trend-chart'
 import { CalendarGrid } from '../components/calendar-grid'
@@ -36,6 +37,10 @@ export function StatsPage(props: {
     appTrend: AppUsageTrendResponse | null
     appTrendPeriod: TrendPeriod
     setAppTrendPeriod: (value: TrendPeriod) => void
+    appUsageMetric: UsageMetric
+    setAppUsageMetric: (value: UsageMetric) => void
+    appStats: DonutSlice[]
+    appStatsTotalSeconds: number
     calendarDays: DaySummary[]
     calendarMonth: string
     selectedDate: string
@@ -45,14 +50,19 @@ export function StatsPage(props: {
     isTimelineRefreshing: boolean
     isPeriodRefreshing: boolean
     isAppTrendRefreshing: boolean
+    isAppStatsRefreshing: boolean
     isCalendarRefreshing: boolean
     appTrendError: string | null
+    appStatsError: string | null
     onCalendarMonthChange: (month: string) => void
     onSelectDate: (date: string) => void
 }) {
     const presenceByKey = new Map(
         (props.dashboard?.presenceSlices ?? []).map((slice) => [slice.key, slice.value]),
     )
+    const appDistributionLoading =
+        props.loading || (props.isAppStatsRefreshing && props.appStats.length === 0)
+    const showVisibleMetricNote = props.appUsageMetric === 'visible_window'
 
     return (
         <section className="page-stack">
@@ -82,6 +92,10 @@ export function StatsPage(props: {
                         </div>
                         <div className="stats-trend-actions">
                             <RefreshBadge active={props.isAppTrendRefreshing} />
+                            <MetricSwitch
+                                value={props.appUsageMetric}
+                                onChange={props.setAppUsageMetric}
+                            />
                             <div className="ui-segmented" aria-label="应用趋势范围">
                                 <button
                                     type="button"
@@ -103,10 +117,17 @@ export function StatsPage(props: {
                     {props.appTrendError && !props.appTrend ? (
                         <div className="state-card error-card">{props.appTrendError}</div>
                     ) : (
-                        <AppUsageTrendChart
-                            trend={props.appTrend}
-                            loading={props.loading || props.isAppTrendRefreshing}
-                        />
+                        <>
+                            {showVisibleMetricNote ? (
+                                <p className="stats-metric-note">
+                                    可见窗口可并行累计，总和可能超过活跃时长。
+                                </p>
+                            ) : null}
+                            <AppUsageTrendChart
+                                trend={props.appTrend}
+                                loading={props.loading || (props.isAppTrendRefreshing && !props.appTrend)}
+                            />
+                        </>
                     )}
                 </div>
             </section>
@@ -117,17 +138,21 @@ export function StatsPage(props: {
                         <div>
                             <h2>应用分布</h2>
                         </div>
-                        <RefreshBadge active={props.isTimelineRefreshing} />
+                        <RefreshBadge active={props.isAppStatsRefreshing} />
                     </div>
-                    <DonutChart
-                        loading={props.loading}
-                        title="应用分布"
-                        totalLabel={formatDuration(props.dashboard?.summary.focusSeconds ?? 0)}
-                        slices={props.dashboard?.appSlices ?? []}
-                        filter={props.appFilter}
-                        filterKind="app"
-                        onSelect={props.setAppFilter}
-                    />
+                    {props.appStatsError && props.appStats.length === 0 ? (
+                        <div className="state-card error-card">{props.appStatsError}</div>
+                    ) : (
+                        <DonutChart
+                            loading={appDistributionLoading}
+                            title="应用分布"
+                            totalLabel={formatDuration(props.appStatsTotalSeconds)}
+                            slices={props.appStats}
+                            filter={props.appFilter}
+                            filterKind="app"
+                            onSelect={props.setAppFilter}
+                        />
+                    )}
                 </div>
 
                 <div className="panel page-panel stats-analysis-card">
@@ -173,6 +198,30 @@ export function StatsPage(props: {
                 </div>
             </section>
         </section>
+    )
+}
+
+function MetricSwitch(props: {
+    value: UsageMetric
+    onChange: (value: UsageMetric) => void
+}) {
+    return (
+        <div className="ui-segmented" aria-label="应用统计口径">
+            <button
+                type="button"
+                className={props.value === 'visible_window' ? 'is-active' : ''}
+                onClick={() => props.onChange('visible_window')}
+            >
+                可见窗口
+            </button>
+            <button
+                type="button"
+                className={props.value === 'focus' ? 'is-active' : ''}
+                onClick={() => props.onChange('focus')}
+            >
+                前台焦点
+            </button>
+        </div>
     )
 }
 

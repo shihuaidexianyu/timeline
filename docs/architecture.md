@@ -13,11 +13,12 @@
 
 1. Windows 轮询当前前台窗口，生成窗口快照
 2. 快照变化时结束上一条 `focus_segment`，再创建新段
-3. Windows 输入状态轮询产生 `presence_segment`
-4. 浏览器扩展在标签切换、URL 变化、窗口焦点变化和心跳时上报域名事件
-5. 本地服务只在前台应用确认为浏览器时维护 `browser_segment`
-6. Web UI 按日期读取 `focus_segments`、`browser_segments` 和 `presence_segments`
-7. Presence 连续 `active` 超过健康阈值时触发本地休息提醒
+3. Windows 枚举当前输入桌面的顶层窗口，扣除上层窗口遮挡面积后生成 `visible_window_segment`
+4. Windows 输入状态轮询产生 `presence_segment`
+5. 浏览器扩展在标签切换、URL 变化、窗口焦点变化和心跳时上报域名事件
+6. 本地服务只在前台应用确认为浏览器时维护 `browser_segment`
+7. Web UI 按日期读取 `focus_segments`、`browser_segments`、`presence_segments` 和可见窗口预聚合数据
+8. Presence 连续 `active` 超过健康阈值时触发本地休息提醒
 
 ## segment 规则
 
@@ -35,6 +36,15 @@
 - 相同 `domain + browser_window_id + tab_id` 连续事件会合并
 - 域名变化、标签变化、窗口切换或浏览器失焦时结束旧段
 
+### visible_window_segments
+
+- 每个轮询周期枚举当前输入桌面的顶层窗口
+- 排除最小化、不可见、DWM cloaked、工具窗口、空矩形窗口和忽略应用
+- 按 z-order 计算扣除上层窗口后的实际可见面积，可见面积比例大于 5% 才计时
+- 同一应用多个窗口同时可见时分别记录窗口段，统计页按应用聚合
+- 锁屏时关闭当前可见窗口段；idle 不会停止可见窗口计时
+- 历史 `focus_segments` 不回填为可见窗口数据
+
 ### presence_segments
 
 - `active`：最近输入时间在 idle 阈值内，且当前桌面未锁定
@@ -47,7 +57,8 @@
 
 - 当前实现把 `presence = active` 视为真实使用时间
 - `idle` 和 `locked` 只保留在时间线中，不计入 `total_active_seconds`
-- 应用与域名总时长当前按时间线原始时长聚合
+- 域名总时长当前按浏览器前台事件聚合
+- 统计页应用趋势和应用分布默认使用可见窗口口径；可切换到前台焦点口径对照
 
 ## 应用名标准化
 

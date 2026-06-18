@@ -6,7 +6,7 @@ use common::{
     AppInfo, AppUsageTrendResponse, AppUsageTrendSeries, BrowserEventPayload, BrowserSegment,
     DaySummary, DebugEvent, DurationStat, FocusSegment, FocusStats, KeyedDurationEntry,
     MonthCalendarResponse, PeriodStat, PeriodSummaryResponse, PresenceSegment, PresenceState,
-    TimelineDayResponse, TrendPeriod,
+    TimelineDayResponse, TrendPeriod, UsageMetric,
 };
 use serde::Serialize;
 use sqlx::{Row, Sqlite, SqlitePool, Transaction, sqlite::SqliteConnectOptions};
@@ -19,6 +19,17 @@ use time::{Date, Duration, OffsetDateTime, PrimitiveDateTime, UtcOffset};
 pub struct AgentStore {
     pool: SqlitePool,
     timezone: UtcOffset,
+}
+
+#[derive(Debug, Clone)]
+pub struct VisibleWindowSegmentInput {
+    pub process_name: String,
+    pub display_name: String,
+    pub exe_path: Option<String>,
+    pub window_title: Option<String>,
+    pub hwnd: i64,
+    pub process_id: u32,
+    pub visible_area_ratio: f64,
 }
 
 struct Migration {
@@ -180,6 +191,41 @@ CREATE INDEX IF NOT EXISTS idx_daily_domain_usage_date_seconds ON daily_domain_u
 CREATE INDEX IF NOT EXISTS idx_daily_presence_usage_date_state ON daily_presence_usage(date, state);
 "#,
     },
+    Migration {
+        version: 7,
+        name: "create_visible_window_rollups",
+        sql: r#"
+CREATE TABLE IF NOT EXISTS visible_window_segments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  process_name TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  exe_path TEXT,
+  window_title TEXT,
+  hwnd INTEGER NOT NULL,
+  process_id INTEGER NOT NULL,
+  visible_area_ratio REAL NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  last_seen_at TEXT,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS daily_visible_app_usage (
+  date TEXT NOT NULL,
+  process_name TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  seconds INTEGER NOT NULL DEFAULT 0,
+  segment_count INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (date, process_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_visible_window_segments_ended_started ON visible_window_segments(ended_at, started_at);
+CREATE INDEX IF NOT EXISTS idx_visible_window_segments_open ON visible_window_segments(id) WHERE ended_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_visible_window_segments_hwnd_process ON visible_window_segments(hwnd, process_id, ended_at);
+CREATE INDEX IF NOT EXISTS idx_daily_visible_app_usage_date_seconds ON daily_visible_app_usage(date, seconds DESC);
+"#,
+    },
 ];
 
 /// Keep recent raw events for local debugging while capping unbounded DB growth.
@@ -247,6 +293,15 @@ WHERE ended_at IS NULL
         )
         .fetch_all(&mut *tx)
         .await?;
+        let visible_rows = sqlx::query(
+            r#"
+SELECT process_name, display_name, started_at, COALESCE(last_seen_at, started_at) AS restored_ended_at
+FROM visible_window_segments
+WHERE ended_at IS NULL
+"#,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
 
         for row in focus_rows {
             let process_name = row.get::<String, _>("process_name");
@@ -279,6 +334,21 @@ WHERE ended_at IS NULL
                 .await?;
         }
 
+        for row in visible_rows {
+            let process_name = row.get::<String, _>("process_name");
+            let display_name = row.get::<String, _>("display_name");
+            let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
+            let restored_ended_at = parse_time(row.get::<String, _>("restored_ended_at").as_str())?;
+            self.add_visible_app_segment_counts_tx(
+                &mut tx,
+                &process_name,
+                &display_name,
+                started_at,
+                restored_ended_at,
+            )
+            .await?;
+        }
+
         sqlx::query(
             "UPDATE focus_segments SET ended_at = COALESCE(last_seen_at, started_at) WHERE ended_at IS NULL",
         )
@@ -291,6 +361,11 @@ WHERE ended_at IS NULL
             .await?;
         sqlx::query(
             "UPDATE presence_segments SET ended_at = COALESCE(last_seen_at, started_at) WHERE ended_at IS NULL",
+        )
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "UPDATE visible_window_segments SET ended_at = COALESCE(last_seen_at, started_at) WHERE ended_at IS NULL",
         )
             .execute(&mut *tx)
             .await?;
@@ -639,6 +714,144 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
         Ok(())
     }
 
+    pub async fn start_visible_window_segment(
+        &self,
+        window: &VisibleWindowSegmentInput,
+        observed_at: OffsetDateTime,
+    ) -> Result<i64> {
+        let observed_at = format_time(observed_at)?;
+        let result = sqlx::query(
+            r#"
+INSERT INTO visible_window_segments (
+  process_name,
+  display_name,
+  exe_path,
+  window_title,
+  hwnd,
+  process_id,
+  visible_area_ratio,
+  started_at,
+  last_seen_at,
+  created_at
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"#,
+        )
+        .bind(&window.process_name)
+        .bind(&window.display_name)
+        .bind(&window.exe_path)
+        .bind(&window.window_title)
+        .bind(window.hwnd)
+        .bind(i64::from(window.process_id))
+        .bind(window.visible_area_ratio)
+        .bind(&observed_at)
+        .bind(&observed_at)
+        .bind(&observed_at)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    pub async fn touch_visible_window_segment(
+        &self,
+        id: i64,
+        observed_at: OffsetDateTime,
+        visible_area_ratio: f64,
+    ) -> Result<()> {
+        let observed_at = format_time(observed_at)?;
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT process_name, display_name, started_at, last_seen_at FROM visible_window_segments WHERE id = ? AND ended_at IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "UPDATE visible_window_segments SET last_seen_at = ?, visible_area_ratio = ? WHERE id = ? AND ended_at IS NULL",
+        )
+        .bind(&observed_at)
+        .bind(visible_area_ratio)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+        if let Some(row) = row {
+            let process_name = row.get::<String, _>("process_name");
+            let display_name = row.get::<String, _>("display_name");
+            let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
+            let previous_seen_at =
+                parse_optional_time(row.get::<Option<String>, _>("last_seen_at"))?
+                    .unwrap_or(started_at);
+            let touched_at = parse_time(&observed_at)?;
+            self.add_visible_app_usage_seconds_tx(
+                &mut tx,
+                &process_name,
+                &display_name,
+                previous_seen_at,
+                touched_at,
+            )
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn end_visible_window_segment(
+        &self,
+        id: i64,
+        observed_at: OffsetDateTime,
+    ) -> Result<()> {
+        let observed_at = format_time(observed_at)?;
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT process_name, display_name, started_at, last_seen_at FROM visible_window_segments WHERE id = ? AND ended_at IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "UPDATE visible_window_segments SET last_seen_at = ?, ended_at = ? WHERE id = ? AND ended_at IS NULL",
+        )
+        .bind(&observed_at)
+        .bind(&observed_at)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+
+        if let Some(row) = row {
+            let process_name = row.get::<String, _>("process_name");
+            let display_name = row.get::<String, _>("display_name");
+            let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
+            let previous_seen_at =
+                parse_optional_time(row.get::<Option<String>, _>("last_seen_at"))?
+                    .unwrap_or(started_at);
+            let ended_at = parse_time(&observed_at)?;
+            self.add_visible_app_usage_seconds_tx(
+                &mut tx,
+                &process_name,
+                &display_name,
+                previous_seen_at,
+                ended_at,
+            )
+            .await?;
+            self.add_visible_app_segment_counts_tx(
+                &mut tx,
+                &process_name,
+                &display_name,
+                started_at,
+                ended_at,
+            )
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn append_raw_event<T>(
         &self,
         kind: &str,
@@ -921,6 +1134,43 @@ SET value = excluded.value,
         Ok(())
     }
 
+    async fn add_visible_app_usage_seconds_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        process_name: &str,
+        display_name: &str,
+        start: OffsetDateTime,
+        end: OffsetDateTime,
+    ) -> Result<()> {
+        for chunk in split_interval_by_local_day(start, end, self.timezone)? {
+            upsert_daily_visible_app_usage_tx(
+                tx,
+                &chunk.date,
+                process_name,
+                display_name,
+                chunk.seconds,
+                0,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn add_visible_app_segment_counts_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        process_name: &str,
+        display_name: &str,
+        start: OffsetDateTime,
+        end: OffsetDateTime,
+    ) -> Result<()> {
+        for chunk in split_interval_by_local_day(start, end, self.timezone)? {
+            upsert_daily_visible_app_usage_tx(tx, &chunk.date, process_name, display_name, 0, 1)
+                .await?;
+        }
+        Ok(())
+    }
+
     pub async fn read_day_timeline(
         &self,
         date: Date,
@@ -1068,19 +1318,22 @@ ORDER BY started_at ASC
         &self,
         date: Date,
         _timezone: UtcOffset,
+        metric: UsageMetric,
     ) -> Result<Vec<DurationStat>> {
+        let table = app_usage_table(metric);
         let mut buckets: BTreeMap<String, (String, i64)> = BTreeMap::new();
-        let rows = sqlx::query(
+        let sql = format!(
             r#"
 SELECT process_name, display_name, seconds
-FROM daily_app_usage
+FROM {table}
 WHERE date = ?
 ORDER BY seconds DESC
 "#,
-        )
-        .bind(date.to_string())
-        .fetch_all(&self.pool)
-        .await?;
+        );
+        let rows = sqlx::query(&sql)
+            .bind(date.to_string())
+            .fetch_all(&self.pool)
+            .await?;
         let mut total_seconds = 0;
         for row in rows {
             let seconds = row.get::<i64, _>("seconds");
@@ -1453,6 +1706,7 @@ WHERE state = 'active' AND date >= ? AND date <= ?
         anchor_date: Date,
         period: TrendPeriod,
         limit: usize,
+        metric: UsageMetric,
     ) -> Result<AppUsageTrendResponse> {
         let (start_date, end_date) = trend_bounds(anchor_date, period)?;
         let days = date_range(start_date, end_date)?;
@@ -1461,18 +1715,20 @@ WHERE state = 'active' AND date >= ? AND date <= ?
             .enumerate()
             .map(|(index, date)| (date.to_string(), index))
             .collect::<BTreeMap<_, _>>();
-        let rows = sqlx::query(
+        let table = app_usage_table(metric);
+        let sql = format!(
             r#"
 SELECT date, process_name, display_name, seconds
-FROM daily_app_usage
+FROM {table}
 WHERE date >= ? AND date <= ? AND seconds > 0
 ORDER BY date ASC
 "#,
-        )
-        .bind(start_date.to_string())
-        .bind(end_date.to_string())
-        .fetch_all(&self.pool)
-        .await?;
+        );
+        let rows = sqlx::query(&sql)
+            .bind(start_date.to_string())
+            .bind(end_date.to_string())
+            .fetch_all(&self.pool)
+            .await?;
 
         let mut totals: BTreeMap<String, (String, i64)> = BTreeMap::new();
         let mut values: BTreeMap<(String, String), i64> = BTreeMap::new();
@@ -1523,6 +1779,7 @@ ORDER BY date ASC
 
         Ok(AppUsageTrendResponse {
             period,
+            metric,
             start_date: start_date.to_string(),
             end_date: end_date.to_string(),
             timezone: self.timezone.to_string(),
@@ -1825,6 +2082,42 @@ SET seconds = daily_presence_usage.seconds + excluded.seconds,
     Ok(())
 }
 
+async fn upsert_daily_visible_app_usage_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    date: &str,
+    process_name: &str,
+    display_name: &str,
+    seconds: i64,
+    segment_count: i64,
+) -> Result<()> {
+    if seconds <= 0 && segment_count <= 0 {
+        return Ok(());
+    }
+
+    let updated_at = format_time(OffsetDateTime::now_utc())?;
+    sqlx::query(
+        r#"
+INSERT INTO daily_visible_app_usage (date, process_name, display_name, seconds, segment_count, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(date, process_name) DO UPDATE
+SET display_name = excluded.display_name,
+    seconds = daily_visible_app_usage.seconds + excluded.seconds,
+    segment_count = daily_visible_app_usage.segment_count + excluded.segment_count,
+    updated_at = excluded.updated_at
+"#,
+    )
+    .bind(date)
+    .bind(process_name)
+    .bind(display_name)
+    .bind(seconds)
+    .bind(segment_count)
+    .bind(updated_at)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
 fn trend_bounds(anchor_date: Date, period: TrendPeriod) -> Result<(Date, Date)> {
     match period {
         TrendPeriod::Week => {
@@ -1913,6 +2206,13 @@ fn to_duration_stats(
     rows
 }
 
+fn app_usage_table(metric: UsageMetric) -> &'static str {
+    match metric {
+        UsageMetric::Focus => "daily_app_usage",
+        UsageMetric::VisibleWindow => "daily_visible_app_usage",
+    }
+}
+
 /// Returns the number of days in the given year/month.
 fn days_in_month(year: i32, month: time::Month) -> u8 {
     let next_month = month.next();
@@ -1929,8 +2229,8 @@ fn days_in_month(year: i32, month: time::Month) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentStore, AppConfig, parse_time};
-    use common::{AppInfo, BrowserEventPayload, PresenceState};
+    use super::{AgentStore, AppConfig, VisibleWindowSegmentInput, parse_time};
+    use common::{AppInfo, BrowserEventPayload, PresenceState, UsageMetric};
     use sqlx::Row;
     use std::path::PathBuf;
     use time::{Duration, OffsetDateTime};
@@ -2118,6 +2418,7 @@ mod tests {
                 time::Date::from_calendar_date(2026, time::Month::June, 17).expect("anchor date"),
                 common::TrendPeriod::Week,
                 6,
+                UsageMetric::Focus,
             )
             .await
             .expect("read app trend");
@@ -2168,6 +2469,7 @@ VALUES ('legacy.exe', 'Legacy App', NULL, NULL, 0, ?, ?, ?, ?)
                 time::Date::from_calendar_date(2026, time::Month::June, 17).expect("anchor date"),
                 common::TrendPeriod::Week,
                 6,
+                UsageMetric::Focus,
             )
             .await
             .expect("read app trend");
@@ -2176,6 +2478,130 @@ VALUES ('legacy.exe', 'Legacy App', NULL, NULL, 0, ?, ?, ?, ?)
         assert_eq!(trend.series[0].total_seconds, 45 * 60);
 
         let _ = std::fs::remove_file(database_path);
+    }
+
+    #[tokio::test]
+    async fn visible_window_rollups_count_parallel_windows_and_stay_separate_from_focus() {
+        let (store, database_path) = temp_store().await;
+        let start = parse_time("2026-06-16T23:30:00Z").expect("start");
+        let end = parse_time("2026-06-17T00:30:00Z").expect("end");
+        let code = visible_input("code.exe", "Code", 100, 10, 0.50);
+        let weixin = visible_input("weixin.exe", "Weixin", 200, 20, 0.45);
+
+        let code_id = store
+            .start_visible_window_segment(&code, start)
+            .await
+            .expect("start code visible");
+        let weixin_id = store
+            .start_visible_window_segment(&weixin, start)
+            .await
+            .expect("start weixin visible");
+        store
+            .end_visible_window_segment(code_id, end)
+            .await
+            .expect("end code visible");
+        store
+            .end_visible_window_segment(weixin_id, end)
+            .await
+            .expect("end weixin visible");
+
+        let anchor =
+            time::Date::from_calendar_date(2026, time::Month::June, 17).expect("anchor date");
+        let visible_trend = store
+            .read_app_usage_trend(
+                anchor,
+                common::TrendPeriod::Week,
+                6,
+                UsageMetric::VisibleWindow,
+            )
+            .await
+            .expect("read visible trend");
+        assert_eq!(visible_trend.metric, UsageMetric::VisibleWindow);
+        assert_eq!(visible_trend.series.len(), 2);
+        assert_eq!(visible_trend.series[0].total_seconds, 60 * 60);
+        assert_eq!(visible_trend.series[1].total_seconds, 60 * 60);
+        assert_eq!(
+            visible_trend
+                .series
+                .iter()
+                .map(|series| series.daily_seconds.iter().sum::<i64>())
+                .sum::<i64>(),
+            2 * 60 * 60
+        );
+
+        let focus_trend = store
+            .read_app_usage_trend(anchor, common::TrendPeriod::Week, 6, UsageMetric::Focus)
+            .await
+            .expect("read focus trend");
+        assert!(focus_trend.series.is_empty());
+
+        let visible_stats = store
+            .read_app_stats(anchor, time::UtcOffset::UTC, UsageMetric::VisibleWindow)
+            .await
+            .expect("read visible app stats");
+        assert_eq!(visible_stats.len(), 2);
+        assert!(visible_stats.iter().all(|row| row.seconds == 30 * 60));
+
+        let _ = std::fs::remove_file(database_path);
+    }
+
+    #[tokio::test]
+    async fn restore_unclosed_visible_windows_uses_last_seen_at() {
+        let (store, database_path) = temp_store().await;
+        let start = parse_time("2026-06-17T01:00:00Z").expect("start");
+        let last_seen = parse_time("2026-06-17T01:20:00Z").expect("last seen");
+        let code = visible_input("code.exe", "Code", 100, 10, 0.50);
+        let id = store
+            .start_visible_window_segment(&code, start)
+            .await
+            .expect("start visible");
+        store
+            .touch_visible_window_segment(id, last_seen, 0.50)
+            .await
+            .expect("touch visible");
+
+        store
+            .restore_unclosed_segments()
+            .await
+            .expect("restore segments");
+
+        let row = sqlx::query("SELECT ended_at FROM visible_window_segments WHERE id = ?")
+            .bind(id)
+            .fetch_one(&store.pool)
+            .await
+            .expect("load visible row");
+        let ended_at = row.get::<String, _>("ended_at");
+        assert_eq!(parse_time(&ended_at).expect("parse ended_at"), last_seen);
+
+        let stats = store
+            .read_app_stats(
+                time::Date::from_calendar_date(2026, time::Month::June, 17).expect("anchor date"),
+                time::UtcOffset::UTC,
+                UsageMetric::VisibleWindow,
+            )
+            .await
+            .expect("read visible app stats");
+        assert_eq!(stats[0].seconds, 20 * 60);
+
+        let _ = std::fs::remove_file(database_path);
+    }
+
+    fn visible_input(
+        process_name: &str,
+        display_name: &str,
+        hwnd: i64,
+        process_id: u32,
+        visible_area_ratio: f64,
+    ) -> VisibleWindowSegmentInput {
+        VisibleWindowSegmentInput {
+            process_name: process_name.to_string(),
+            display_name: display_name.to_string(),
+            exe_path: Some(format!("C:\\Apps\\{process_name}")),
+            window_title: None,
+            hwnd,
+            process_id,
+            visible_area_ratio,
+        }
     }
 
     async fn temp_store() -> (AgentStore, PathBuf) {

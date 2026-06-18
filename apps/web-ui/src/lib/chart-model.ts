@@ -2,6 +2,7 @@
 
 import type {
   BrowserSegment,
+  DurationStat,
   FocusSegment,
   PresenceSegment,
   TimelineDayResponse,
@@ -228,6 +229,43 @@ export function buildBrowserDetailModel(
     slices: buildDonutSlices(overlappingSegments, 6),
     totalSeconds: sumDurations(filteredSegments),
   }
+}
+
+export function durationStatsToDonutSlices(
+  stats: DurationStat[],
+  namespace: 'app' | 'domain',
+  topN = 6,
+): DonutSlice[] {
+  const sorted = [...stats]
+    .filter((item) => item.seconds > 0)
+    .sort((left, right) => right.seconds - left.seconds)
+  const total = sorted.reduce((sum, item) => sum + item.seconds, 0)
+  const primary = sorted.slice(0, topN)
+  const palette = buildDistinctPalette(primary.length, namespace)
+  const slices = primary.map((item, index) => ({
+    id: `slice-${item.key}`,
+    key: item.key,
+    label: item.label,
+    value: item.seconds,
+    percentage: total === 0 ? 0 : (item.seconds / total) * 100,
+    color: palette[index] ?? '#2f6fed',
+  }))
+
+  if (sorted.length > topN) {
+    const otherValue = sorted
+      .slice(topN)
+      .reduce((sum, item) => sum + item.seconds, 0)
+    slices.push({
+      id: 'slice-others',
+      key: 'others',
+      label: '其他',
+      value: otherValue,
+      percentage: total === 0 ? 0 : (otherValue / total) * 100,
+      color: '#94a3b8',
+    })
+  }
+
+  return slices
 }
 
 export function formatDuration(seconds: number) {

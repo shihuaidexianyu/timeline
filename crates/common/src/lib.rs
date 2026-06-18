@@ -259,6 +259,14 @@ pub enum TrendPeriod {
     Month,
 }
 
+/// Application usage metric used by stats endpoints.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UsageMetric {
+    Focus,
+    VisibleWindow,
+}
+
 /// A single application series in the daily usage trend response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppUsageTrendSeries {
@@ -272,6 +280,7 @@ pub struct AppUsageTrendSeries {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppUsageTrendResponse {
     pub period: TrendPeriod,
+    pub metric: UsageMetric,
     pub start_date: String,
     pub end_date: String,
     pub timezone: String,

@@ -412,6 +412,12 @@
   justify-content: flex-end;
 }
 
+.stats-metric-note {
+  margin: -2px 0 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
 .app-trend-chart {
   position: relative;
   min-height: 336px;

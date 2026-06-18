@@ -37,6 +37,25 @@
 
 按应用聚合当天总时长。
 
+## `GET /api/stats/apps/trend?date=2026-03-21&period=week&limit=6`
+
+返回以指定日期为锚点的应用使用趋势，用于周/月折线图。
+
+查询参数：
+
+- `date`：锚点日期，格式为 `YYYY-MM-DD`；省略时使用本地服务时区下的今天
+- `period`：`week` 或 `month`，省略时为 `week`
+- `limit`：返回前 N 个应用，当前后端会限制在 `1..=12`
+
+响应字段：
+
+- `period`
+- `start_date`
+- `end_date`
+- `timezone`
+- `days`：范围内的本地日期数组
+- `series`：应用序列数组，包含 `key`、`label`、`total_seconds`、`daily_seconds`
+
 ## `GET /api/stats/domains?date=2026-03-21`
 
 按域名聚合当天总时长。

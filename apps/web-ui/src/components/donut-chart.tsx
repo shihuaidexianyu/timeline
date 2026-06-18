@@ -25,7 +25,7 @@ const ReactEChartsCore = (
     : ReactEChartsCoreImport
 ) as React.ComponentType<Record<string, unknown>>
 
-const MONO_FAMILY = '"JetBrains Mono", "Cascadia Mono", "Consolas", "SFMono-Regular", monospace'
+const SANS_FAMILY = '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif'
 const PIE_CENTER_X = '50%'
 
 export function DonutChart(props: {
@@ -68,7 +68,7 @@ export function DonutChart(props: {
         borderWidth: 1,
         textStyle: {
           color: labelColor,
-          fontFamily: MONO_FAMILY,
+          fontFamily: SANS_FAMILY,
         },
         formatter: (params) => {
           const slice = getSliceDatum(params)
@@ -89,7 +89,7 @@ export function DonutChart(props: {
         {
           name: props.title,
           type: 'pie',
-          radius: ['56%', '76%'],
+          radius: ['58%', '72%'],
           center: [PIE_CENTER_X, '50%'],
           avoidLabelOverlap: true,
           label: { show: false },
@@ -99,11 +99,9 @@ export function DonutChart(props: {
             borderWidth: 1,
           },
           emphasis: {
-            scale: true,
-            scaleSize: 10,
+            scale: false,
             itemStyle: {
-              shadowBlur: 14,
-              shadowColor: 'rgba(0, 0, 0, 0.35)',
+              opacity: 1,
             },
           },
           data: chartSlices.map((slice) => {
@@ -119,7 +117,7 @@ export function DonutChart(props: {
               name: slice.label,
               raw: slice,
               selected: isActive,
-              selectedOffset: 8,
+              selectedOffset: isActive ? 2 : 0,
               itemStyle: {
                 color: slice.color,
                 opacity: shouldDim ? 0.24 : 0.96,
@@ -283,7 +281,7 @@ export function CompactDonutChart(props: {
         borderWidth: 1,
         textStyle: {
           color: labelColor,
-          fontFamily: MONO_FAMILY,
+          fontFamily: SANS_FAMILY,
         },
         formatter: (params) => {
           const slice = getSliceDatum(params)
@@ -304,7 +302,7 @@ export function CompactDonutChart(props: {
         {
           name: '状态分布',
           type: 'pie',
-          radius: ['56%', '76%'],
+          radius: ['58%', '72%'],
           center: [PIE_CENTER_X, '50%'],
           selectedMode: false,
           avoidLabelOverlap: true,
@@ -315,11 +313,9 @@ export function CompactDonutChart(props: {
             borderWidth: 1,
           },
           emphasis: {
-            scale: true,
-            scaleSize: 10,
+            scale: false,
             itemStyle: {
-              shadowBlur: 14,
-              shadowColor: 'rgba(0, 0, 0, 0.35)',
+              opacity: 1,
             },
           },
           data: chartSlices.map((slice) => {

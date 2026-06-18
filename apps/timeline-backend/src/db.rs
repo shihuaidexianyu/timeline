@@ -3,12 +3,13 @@
 use crate::config::AppConfig;
 use anyhow::{Context, Result, anyhow};
 use common::{
-    AppInfo, BrowserEventPayload, BrowserSegment, DaySummary, DebugEvent, DurationStat,
-    FocusSegment, FocusStats, KeyedDurationEntry, MonthCalendarResponse, PeriodStat,
-    PeriodSummaryResponse, PresenceSegment, PresenceState, TimelineDayResponse,
+    AppInfo, AppUsageTrendResponse, AppUsageTrendSeries, BrowserEventPayload, BrowserSegment,
+    DaySummary, DebugEvent, DurationStat, FocusSegment, FocusStats, KeyedDurationEntry,
+    MonthCalendarResponse, PeriodStat, PeriodSummaryResponse, PresenceSegment, PresenceState,
+    TimelineDayResponse, TrendPeriod,
 };
 use serde::Serialize;
-use sqlx::{Row, SqlitePool, sqlite::SqliteConnectOptions};
+use sqlx::{Row, Sqlite, SqlitePool, Transaction, sqlite::SqliteConnectOptions};
 use std::collections::BTreeMap;
 use std::str::FromStr;
 use time::format_description::well_known::Rfc3339;
@@ -17,6 +18,7 @@ use time::{Date, Duration, OffsetDateTime, PrimitiveDateTime, UtcOffset};
 #[derive(Clone)]
 pub struct AgentStore {
     pool: SqlitePool,
+    timezone: UtcOffset,
 }
 
 struct Migration {
@@ -126,13 +128,66 @@ CREATE INDEX IF NOT EXISTS idx_browser_segments_open ON browser_segments(id) WHE
 CREATE INDEX IF NOT EXISTS idx_presence_segments_open ON presence_segments(id) WHERE ended_at IS NULL;
 "#,
     },
+    Migration {
+        version: 5,
+        name: "add_overlap_lookup_indexes",
+        sql: r#"
+CREATE INDEX IF NOT EXISTS idx_focus_segments_ended_started ON focus_segments(ended_at, started_at);
+CREATE INDEX IF NOT EXISTS idx_browser_segments_ended_started ON browser_segments(ended_at, started_at);
+CREATE INDEX IF NOT EXISTS idx_presence_segments_ended_started ON presence_segments(ended_at, started_at);
+"#,
+    },
+    Migration {
+        version: 6,
+        name: "create_daily_rollups",
+        sql: r#"
+CREATE TABLE IF NOT EXISTS daily_app_usage (
+  date TEXT NOT NULL,
+  process_name TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  seconds INTEGER NOT NULL DEFAULT 0,
+  segment_count INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (date, process_name)
+);
+
+CREATE TABLE IF NOT EXISTS daily_domain_usage (
+  date TEXT NOT NULL,
+  domain TEXT NOT NULL,
+  seconds INTEGER NOT NULL DEFAULT 0,
+  segment_count INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (date, domain)
+);
+
+CREATE TABLE IF NOT EXISTS daily_presence_usage (
+  date TEXT NOT NULL,
+  state TEXT NOT NULL,
+  seconds INTEGER NOT NULL DEFAULT 0,
+  segment_count INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (date, state)
+);
+
+CREATE TABLE IF NOT EXISTS rollup_metadata (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_daily_app_usage_date_seconds ON daily_app_usage(date, seconds DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_domain_usage_date_seconds ON daily_domain_usage(date, seconds DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_presence_usage_date_state ON daily_presence_usage(date, state);
+"#,
+    },
 ];
 
 /// Keep recent raw events for local debugging while capping unbounded DB growth.
 const RAW_EVENTS_MAX_ROWS: i64 = 50_000;
+const DAILY_ROLLUP_VERSION: &str = "1";
 
 impl AgentStore {
-    pub async fn connect(config: &AppConfig) -> Result<Self> {
+    pub async fn connect(config: &AppConfig, timezone: UtcOffset) -> Result<Self> {
         config.ensure_parent_dirs()?;
 
         let connect_options = SqliteConnectOptions::from_str(
@@ -149,7 +204,7 @@ impl AgentStore {
             .await
             .context("failed to connect sqlite")?;
 
-        let store = Self { pool };
+        let store = Self { pool, timezone };
         store.run_migrations().await?;
         Ok(store)
     }
@@ -164,6 +219,65 @@ impl AgentStore {
             .begin()
             .await
             .context("failed to begin transaction")?;
+
+        let focus_rows = sqlx::query(
+            r#"
+SELECT process_name, display_name, started_at, COALESCE(last_seen_at, started_at) AS restored_ended_at
+FROM focus_segments
+WHERE ended_at IS NULL
+"#,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let browser_rows = sqlx::query(
+            r#"
+SELECT domain, started_at, COALESCE(last_seen_at, started_at) AS restored_ended_at
+FROM browser_segments
+WHERE ended_at IS NULL
+"#,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        let presence_rows = sqlx::query(
+            r#"
+SELECT state, started_at, COALESCE(last_seen_at, started_at) AS restored_ended_at
+FROM presence_segments
+WHERE ended_at IS NULL
+"#,
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+
+        for row in focus_rows {
+            let process_name = row.get::<String, _>("process_name");
+            let display_name = row.get::<String, _>("display_name");
+            let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
+            let restored_ended_at = parse_time(row.get::<String, _>("restored_ended_at").as_str())?;
+            self.add_app_segment_counts_tx(
+                &mut tx,
+                &process_name,
+                &display_name,
+                started_at,
+                restored_ended_at,
+            )
+            .await?;
+        }
+
+        for row in browser_rows {
+            let domain = row.get::<String, _>("domain");
+            let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
+            let restored_ended_at = parse_time(row.get::<String, _>("restored_ended_at").as_str())?;
+            self.add_domain_segment_counts_tx(&mut tx, &domain, started_at, restored_ended_at)
+                .await?;
+        }
+
+        for row in presence_rows {
+            let state = row.get::<String, _>("state");
+            let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
+            let restored_ended_at = parse_time(row.get::<String, _>("restored_ended_at").as_str())?;
+            self.add_presence_segment_counts_tx(&mut tx, &state, started_at, restored_ended_at)
+                .await?;
+        }
 
         sqlx::query(
             "UPDATE focus_segments SET ended_at = COALESCE(last_seen_at, started_at) WHERE ended_at IS NULL",
@@ -250,22 +364,88 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 
     pub async fn end_focus_segment(&self, id: i64, observed_at: OffsetDateTime) -> Result<()> {
         let observed_at = format_time(observed_at)?;
-        sqlx::query("UPDATE focus_segments SET last_seen_at = ?, ended_at = ? WHERE id = ?")
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT process_name, display_name, started_at, last_seen_at FROM focus_segments WHERE id = ? AND ended_at IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "UPDATE focus_segments SET last_seen_at = ?, ended_at = ? WHERE id = ? AND ended_at IS NULL",
+        )
             .bind(&observed_at)
             .bind(&observed_at)
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+
+        if let Some(row) = row {
+            let process_name = row.get::<String, _>("process_name");
+            let display_name = row.get::<String, _>("display_name");
+            let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
+            let previous_seen_at =
+                parse_optional_time(row.get::<Option<String>, _>("last_seen_at"))?
+                    .unwrap_or(started_at);
+            let ended_at = parse_time(&observed_at)?;
+            self.add_app_usage_seconds_tx(
+                &mut tx,
+                &process_name,
+                &display_name,
+                previous_seen_at,
+                ended_at,
+            )
+            .await?;
+            self.add_app_segment_counts_tx(
+                &mut tx,
+                &process_name,
+                &display_name,
+                started_at,
+                ended_at,
+            )
+            .await?;
+        }
+
+        tx.commit().await?;
         Ok(())
     }
 
     pub async fn touch_focus_segment(&self, id: i64, observed_at: OffsetDateTime) -> Result<()> {
         let observed_at = format_time(observed_at)?;
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT process_name, display_name, started_at, last_seen_at FROM focus_segments WHERE id = ? AND ended_at IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
         sqlx::query("UPDATE focus_segments SET last_seen_at = ? WHERE id = ? AND ended_at IS NULL")
-            .bind(observed_at)
+            .bind(&observed_at)
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+
+        if let Some(row) = row {
+            let process_name = row.get::<String, _>("process_name");
+            let display_name = row.get::<String, _>("display_name");
+            let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
+            let previous_seen_at =
+                parse_optional_time(row.get::<Option<String>, _>("last_seen_at"))?
+                    .unwrap_or(started_at);
+            let touched_at = parse_time(&observed_at)?;
+            self.add_app_usage_seconds_tx(
+                &mut tx,
+                &process_name,
+                &display_name,
+                previous_seen_at,
+                touched_at,
+            )
+            .await?;
+        }
+
+        tx.commit().await?;
         Ok(())
     }
 
@@ -290,24 +470,70 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 
     pub async fn end_presence_segment(&self, id: i64, observed_at: OffsetDateTime) -> Result<()> {
         let observed_at = format_time(observed_at)?;
-        sqlx::query("UPDATE presence_segments SET last_seen_at = ?, ended_at = ? WHERE id = ?")
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT state, started_at, last_seen_at FROM presence_segments WHERE id = ? AND ended_at IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "UPDATE presence_segments SET last_seen_at = ?, ended_at = ? WHERE id = ? AND ended_at IS NULL",
+        )
             .bind(&observed_at)
             .bind(&observed_at)
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+
+        if let Some(row) = row {
+            let state = row.get::<String, _>("state");
+            let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
+            let previous_seen_at =
+                parse_optional_time(row.get::<Option<String>, _>("last_seen_at"))?
+                    .unwrap_or(started_at);
+            let ended_at = parse_time(&observed_at)?;
+            self.add_presence_usage_seconds_tx(&mut tx, &state, previous_seen_at, ended_at)
+                .await?;
+            self.add_presence_segment_counts_tx(&mut tx, &state, started_at, ended_at)
+                .await?;
+        }
+
+        tx.commit().await?;
         Ok(())
     }
 
     pub async fn touch_presence_segment(&self, id: i64, observed_at: OffsetDateTime) -> Result<()> {
         let observed_at = format_time(observed_at)?;
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT state, started_at, last_seen_at FROM presence_segments WHERE id = ? AND ended_at IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
         sqlx::query(
             "UPDATE presence_segments SET last_seen_at = ? WHERE id = ? AND ended_at IS NULL",
         )
-        .bind(observed_at)
+        .bind(&observed_at)
         .bind(id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+
+        if let Some(row) = row {
+            let state = row.get::<String, _>("state");
+            let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
+            let previous_seen_at =
+                parse_optional_time(row.get::<Option<String>, _>("last_seen_at"))?
+                    .unwrap_or(started_at);
+            let touched_at = parse_time(&observed_at)?;
+            self.add_presence_usage_seconds_tx(&mut tx, &state, previous_seen_at, touched_at)
+                .await?;
+        }
+
+        tx.commit().await?;
         Ok(())
     }
 
@@ -346,24 +572,70 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 
     pub async fn end_browser_segment(&self, id: i64, observed_at: OffsetDateTime) -> Result<()> {
         let observed_at = format_time(observed_at)?;
-        sqlx::query("UPDATE browser_segments SET last_seen_at = ?, ended_at = ? WHERE id = ?")
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT domain, started_at, last_seen_at FROM browser_segments WHERE id = ? AND ended_at IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        sqlx::query(
+            "UPDATE browser_segments SET last_seen_at = ?, ended_at = ? WHERE id = ? AND ended_at IS NULL",
+        )
             .bind(&observed_at)
             .bind(&observed_at)
             .bind(id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
+
+        if let Some(row) = row {
+            let domain = row.get::<String, _>("domain");
+            let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
+            let previous_seen_at =
+                parse_optional_time(row.get::<Option<String>, _>("last_seen_at"))?
+                    .unwrap_or(started_at);
+            let ended_at = parse_time(&observed_at)?;
+            self.add_domain_usage_seconds_tx(&mut tx, &domain, previous_seen_at, ended_at)
+                .await?;
+            self.add_domain_segment_counts_tx(&mut tx, &domain, started_at, ended_at)
+                .await?;
+        }
+
+        tx.commit().await?;
         Ok(())
     }
 
     pub async fn touch_browser_segment(&self, id: i64, observed_at: OffsetDateTime) -> Result<()> {
         let observed_at = format_time(observed_at)?;
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query(
+            "SELECT domain, started_at, last_seen_at FROM browser_segments WHERE id = ? AND ended_at IS NULL",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await?;
+
         sqlx::query(
             "UPDATE browser_segments SET last_seen_at = ? WHERE id = ? AND ended_at IS NULL",
         )
-        .bind(observed_at)
+        .bind(&observed_at)
         .bind(id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+
+        if let Some(row) = row {
+            let domain = row.get::<String, _>("domain");
+            let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
+            let previous_seen_at =
+                parse_optional_time(row.get::<Option<String>, _>("last_seen_at"))?
+                    .unwrap_or(started_at);
+            let touched_at = parse_time(&observed_at)?;
+            self.add_domain_usage_seconds_tx(&mut tx, &domain, previous_seen_at, touched_at)
+                .await?;
+        }
+
+        tx.commit().await?;
         Ok(())
     }
 
@@ -396,6 +668,259 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
         Ok(())
     }
 
+    pub async fn ensure_daily_rollups(&self) -> Result<()> {
+        let existing = sqlx::query_scalar::<_, String>(
+            "SELECT value FROM rollup_metadata WHERE key = 'daily_rollup_version'",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if existing.as_deref() == Some(DAILY_ROLLUP_VERSION) {
+            return Ok(());
+        }
+
+        self.rebuild_daily_rollups().await
+    }
+
+    pub async fn rebuild_daily_rollups(&self) -> Result<()> {
+        let mut app_buckets: BTreeMap<(String, String), RollupBucket> = BTreeMap::new();
+        let mut domain_buckets: BTreeMap<(String, String), RollupBucket> = BTreeMap::new();
+        let mut presence_buckets: BTreeMap<(String, String), RollupBucket> = BTreeMap::new();
+
+        let focus_rows = sqlx::query(
+            r#"
+SELECT process_name, display_name, started_at, ended_at, last_seen_at
+FROM focus_segments
+"#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        for row in focus_rows {
+            let process_name = row.get::<String, _>("process_name");
+            let display_name = row.get::<String, _>("display_name");
+            let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
+            let ended_at = parse_optional_time(row.get::<Option<String>, _>("ended_at"))?
+                .or(parse_optional_time(
+                    row.get::<Option<String>, _>("last_seen_at"),
+                )?)
+                .unwrap_or(started_at);
+            add_rollup_chunks(
+                &mut app_buckets,
+                &process_name,
+                &display_name,
+                started_at,
+                ended_at,
+                self.timezone,
+                true,
+            )?;
+        }
+
+        let browser_rows = sqlx::query(
+            r#"
+SELECT domain, started_at, ended_at, last_seen_at
+FROM browser_segments
+"#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        for row in browser_rows {
+            let domain = row.get::<String, _>("domain");
+            let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
+            let ended_at = parse_optional_time(row.get::<Option<String>, _>("ended_at"))?
+                .or(parse_optional_time(
+                    row.get::<Option<String>, _>("last_seen_at"),
+                )?)
+                .unwrap_or(started_at);
+            add_rollup_chunks(
+                &mut domain_buckets,
+                &domain,
+                &domain,
+                started_at,
+                ended_at,
+                self.timezone,
+                true,
+            )?;
+        }
+
+        let presence_rows = sqlx::query(
+            r#"
+SELECT state, started_at, ended_at, last_seen_at
+FROM presence_segments
+"#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        for row in presence_rows {
+            let state = row.get::<String, _>("state");
+            let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
+            let ended_at = parse_optional_time(row.get::<Option<String>, _>("ended_at"))?
+                .or(parse_optional_time(
+                    row.get::<Option<String>, _>("last_seen_at"),
+                )?)
+                .unwrap_or(started_at);
+            add_rollup_chunks(
+                &mut presence_buckets,
+                &state,
+                &state,
+                started_at,
+                ended_at,
+                self.timezone,
+                true,
+            )?;
+        }
+
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM daily_app_usage")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM daily_domain_usage")
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM daily_presence_usage")
+            .execute(&mut *tx)
+            .await?;
+
+        for ((date, key), bucket) in app_buckets {
+            upsert_daily_app_usage_tx(
+                &mut tx,
+                &date,
+                &key,
+                &bucket.label,
+                bucket.seconds,
+                bucket.segment_count,
+            )
+            .await?;
+        }
+
+        for ((date, key), bucket) in domain_buckets {
+            upsert_daily_domain_usage_tx(
+                &mut tx,
+                &date,
+                &key,
+                bucket.seconds,
+                bucket.segment_count,
+            )
+            .await?;
+        }
+
+        for ((date, key), bucket) in presence_buckets {
+            upsert_daily_presence_usage_tx(
+                &mut tx,
+                &date,
+                &key,
+                bucket.seconds,
+                bucket.segment_count,
+            )
+            .await?;
+        }
+
+        let updated_at = format_time(OffsetDateTime::now_utc())?;
+        sqlx::query(
+            r#"
+INSERT INTO rollup_metadata (key, value, updated_at)
+VALUES ('daily_rollup_version', ?, ?)
+ON CONFLICT(key) DO UPDATE
+SET value = excluded.value,
+    updated_at = excluded.updated_at
+"#,
+        )
+        .bind(DAILY_ROLLUP_VERSION)
+        .bind(updated_at)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn add_app_usage_seconds_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        process_name: &str,
+        display_name: &str,
+        start: OffsetDateTime,
+        end: OffsetDateTime,
+    ) -> Result<()> {
+        for chunk in split_interval_by_local_day(start, end, self.timezone)? {
+            upsert_daily_app_usage_tx(
+                tx,
+                &chunk.date,
+                process_name,
+                display_name,
+                chunk.seconds,
+                0,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn add_app_segment_counts_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        process_name: &str,
+        display_name: &str,
+        start: OffsetDateTime,
+        end: OffsetDateTime,
+    ) -> Result<()> {
+        for chunk in split_interval_by_local_day(start, end, self.timezone)? {
+            upsert_daily_app_usage_tx(tx, &chunk.date, process_name, display_name, 0, 1).await?;
+        }
+        Ok(())
+    }
+
+    async fn add_domain_usage_seconds_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        domain: &str,
+        start: OffsetDateTime,
+        end: OffsetDateTime,
+    ) -> Result<()> {
+        for chunk in split_interval_by_local_day(start, end, self.timezone)? {
+            upsert_daily_domain_usage_tx(tx, &chunk.date, domain, chunk.seconds, 0).await?;
+        }
+        Ok(())
+    }
+
+    async fn add_domain_segment_counts_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        domain: &str,
+        start: OffsetDateTime,
+        end: OffsetDateTime,
+    ) -> Result<()> {
+        for chunk in split_interval_by_local_day(start, end, self.timezone)? {
+            upsert_daily_domain_usage_tx(tx, &chunk.date, domain, 0, 1).await?;
+        }
+        Ok(())
+    }
+
+    async fn add_presence_usage_seconds_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        state: &str,
+        start: OffsetDateTime,
+        end: OffsetDateTime,
+    ) -> Result<()> {
+        for chunk in split_interval_by_local_day(start, end, self.timezone)? {
+            upsert_daily_presence_usage_tx(tx, &chunk.date, state, chunk.seconds, 0).await?;
+        }
+        Ok(())
+    }
+
+    async fn add_presence_segment_counts_tx(
+        &self,
+        tx: &mut Transaction<'_, Sqlite>,
+        state: &str,
+        start: OffsetDateTime,
+        end: OffsetDateTime,
+    ) -> Result<()> {
+        for chunk in split_interval_by_local_day(start, end, self.timezone)? {
+            upsert_daily_presence_usage_tx(tx, &chunk.date, state, 0, 1).await?;
+        }
+        Ok(())
+    }
+
     pub async fn read_day_timeline(
         &self,
         date: Date,
@@ -409,12 +934,23 @@ VALUES (?, ?, ?, ?, ?, ?, ?)
 
         let focus_rows = sqlx::query(
             r#"
-SELECT id, process_name, display_name, exe_path, window_title, is_browser, started_at, ended_at
-FROM focus_segments
-WHERE started_at < ? AND COALESCE(ended_at, ?) > ?
+SELECT *
+FROM (
+    SELECT id, process_name, display_name, exe_path, window_title, is_browser, started_at, ended_at
+    FROM focus_segments INDEXED BY idx_focus_segments_ended_started
+    WHERE ended_at > ? AND started_at < ?
+
+    UNION ALL
+
+    SELECT id, process_name, display_name, exe_path, window_title, is_browser, started_at, ended_at
+    FROM focus_segments
+    WHERE ended_at IS NULL AND started_at < ? AND ? > ?
+)
 ORDER BY started_at ASC
 "#,
         )
+        .bind(&day_start_text)
+        .bind(&day_end_text)
         .bind(&day_end_text)
         .bind(&now_text)
         .bind(&day_start_text)
@@ -423,12 +959,23 @@ ORDER BY started_at ASC
 
         let browser_rows = sqlx::query(
             r#"
-SELECT id, domain, page_title, browser_window_id, tab_id, started_at, ended_at
-FROM browser_segments
-WHERE started_at < ? AND COALESCE(ended_at, ?) > ?
+SELECT *
+FROM (
+    SELECT id, domain, page_title, browser_window_id, tab_id, started_at, ended_at
+    FROM browser_segments INDEXED BY idx_browser_segments_ended_started
+    WHERE ended_at > ? AND started_at < ?
+
+    UNION ALL
+
+    SELECT id, domain, page_title, browser_window_id, tab_id, started_at, ended_at
+    FROM browser_segments
+    WHERE ended_at IS NULL AND started_at < ? AND ? > ?
+)
 ORDER BY started_at ASC
 "#,
         )
+        .bind(&day_start_text)
+        .bind(&day_end_text)
         .bind(&day_end_text)
         .bind(&now_text)
         .bind(&day_start_text)
@@ -437,12 +984,23 @@ ORDER BY started_at ASC
 
         let presence_rows = sqlx::query(
             r#"
-SELECT id, state, started_at, ended_at
-FROM presence_segments
-WHERE started_at < ? AND COALESCE(ended_at, ?) > ?
+SELECT *
+FROM (
+    SELECT id, state, started_at, ended_at
+    FROM presence_segments INDEXED BY idx_presence_segments_ended_started
+    WHERE ended_at > ? AND started_at < ?
+
+    UNION ALL
+
+    SELECT id, state, started_at, ended_at
+    FROM presence_segments
+    WHERE ended_at IS NULL AND started_at < ? AND ? > ?
+)
 ORDER BY started_at ASC
 "#,
         )
+        .bind(&day_start_text)
+        .bind(&day_end_text)
         .bind(&day_end_text)
         .bind(&now_text)
         .bind(&day_start_text)
@@ -506,79 +1064,31 @@ ORDER BY started_at ASC
         })
     }
 
-    /// Parses a raw focus segment without clamping to day boundaries.
-    fn parse_focus_segment_row(row: &sqlx::sqlite::SqliteRow) -> Result<FocusSegment> {
-        let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
-        let ended_at = row
-            .get::<Option<String>, _>("ended_at")
-            .map(|v| parse_time(&v))
-            .transpose()?;
-        Ok(FocusSegment {
-            id: row.get("id"),
-            started_at,
-            ended_at,
-            app: AppInfo {
-                process_name: row.get("process_name"),
-                display_name: row.get("display_name"),
-                exe_path: row.get("exe_path"),
-                window_title: row.get("window_title"),
-                is_browser: row.get::<i64, _>("is_browser") == 1,
-            },
-        })
-    }
-
-    /// Parses a raw browser segment without clamping to day boundaries.
-    fn parse_browser_segment_row(row: &sqlx::sqlite::SqliteRow) -> Result<BrowserSegment> {
-        let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
-        let ended_at = row
-            .get::<Option<String>, _>("ended_at")
-            .map(|v| parse_time(&v))
-            .transpose()?;
-        Ok(BrowserSegment {
-            id: row.get("id"),
-            domain: row.get("domain"),
-            page_title: row.get("page_title"),
-            browser_window_id: row.get("browser_window_id"),
-            tab_id: row.get("tab_id"),
-            started_at,
-            ended_at,
-        })
-    }
-
-    /// Parses a raw presence segment without clamping to day boundaries.
-    fn parse_presence_segment_row(row: &sqlx::sqlite::SqliteRow) -> Result<PresenceSegment> {
-        let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
-        let ended_at = row
-            .get::<Option<String>, _>("ended_at")
-            .map(|v| parse_time(&v))
-            .transpose()?;
-        Ok(PresenceSegment {
-            id: row.get("id"),
-            state: parse_presence_state(row.get::<String, _>("state").as_str())?,
-            started_at,
-            ended_at,
-        })
-    }
-
     pub async fn read_app_stats(
         &self,
         date: Date,
-        timezone: UtcOffset,
+        _timezone: UtcOffset,
     ) -> Result<Vec<DurationStat>> {
-        let timeline = self.read_day_timeline(date, timezone).await?;
-        let total_seconds = timeline
-            .focus_segments
-            .iter()
-            .map(segment_seconds_focus)
-            .sum::<i64>();
-
         let mut buckets: BTreeMap<String, (String, i64)> = BTreeMap::new();
-        for segment in timeline.focus_segments {
-            let seconds = segment_seconds_focus(&segment);
-            let entry = buckets
-                .entry(segment.app.process_name.clone())
-                .or_insert((segment.app.display_name.clone(), 0));
-            entry.1 += seconds;
+        let rows = sqlx::query(
+            r#"
+SELECT process_name, display_name, seconds
+FROM daily_app_usage
+WHERE date = ?
+ORDER BY seconds DESC
+"#,
+        )
+        .bind(date.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        let mut total_seconds = 0;
+        for row in rows {
+            let seconds = row.get::<i64, _>("seconds");
+            total_seconds += seconds;
+            buckets.insert(
+                row.get::<String, _>("process_name"),
+                (row.get::<String, _>("display_name"), seconds),
+            );
         }
 
         Ok(to_duration_stats(buckets, total_seconds))
@@ -587,22 +1097,26 @@ ORDER BY started_at ASC
     pub async fn read_domain_stats(
         &self,
         date: Date,
-        timezone: UtcOffset,
+        _timezone: UtcOffset,
     ) -> Result<Vec<DurationStat>> {
-        let timeline = self.read_day_timeline(date, timezone).await?;
-        let total_seconds = timeline
-            .browser_segments
-            .iter()
-            .map(segment_seconds_browser)
-            .sum::<i64>();
-
         let mut buckets: BTreeMap<String, (String, i64)> = BTreeMap::new();
-        for segment in timeline.browser_segments {
-            let seconds = segment_seconds_browser(&segment);
-            let entry = buckets
-                .entry(segment.domain.clone())
-                .or_insert((segment.domain.clone(), 0));
-            entry.1 += seconds;
+        let rows = sqlx::query(
+            r#"
+SELECT domain, seconds
+FROM daily_domain_usage
+WHERE date = ?
+ORDER BY seconds DESC
+"#,
+        )
+        .bind(date.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+        let mut total_seconds = 0;
+        for row in rows {
+            let domain = row.get::<String, _>("domain");
+            let seconds = row.get::<i64, _>("seconds");
+            total_seconds += seconds;
+            buckets.insert(domain.clone(), (domain, seconds));
         }
 
         Ok(to_duration_stats(buckets, total_seconds))
@@ -643,54 +1157,92 @@ ORDER BY started_at ASC
 
     /// Aggregates a single day's segments into a compact summary for calendar
     /// and overview card display.
-    pub async fn read_day_summary(&self, date: Date, timezone: UtcOffset) -> Result<DaySummary> {
-        let timeline = self.read_day_timeline(date, timezone).await?;
+    pub async fn read_day_summary(&self, date: Date, _timezone: UtcOffset) -> Result<DaySummary> {
+        let date_text = date.to_string();
+        let app_rows = sqlx::query(
+            r#"
+SELECT process_name, display_name, seconds, segment_count
+FROM daily_app_usage
+WHERE date = ?
+"#,
+        )
+        .bind(&date_text)
+        .fetch_all(&self.pool)
+        .await?;
+        let domain_rows = sqlx::query(
+            r#"
+SELECT domain, seconds
+FROM daily_domain_usage
+WHERE date = ?
+"#,
+        )
+        .bind(&date_text)
+        .fetch_all(&self.pool)
+        .await?;
+        let active_seconds = sqlx::query_scalar::<_, i64>(
+            r#"
+SELECT COALESCE(SUM(seconds), 0)
+FROM daily_presence_usage
+WHERE date = ? AND state = 'active'
+"#,
+        )
+        .bind(&date_text)
+        .fetch_one(&self.pool)
+        .await?;
 
-        let focus_seconds: i64 = timeline
-            .focus_segments
-            .iter()
-            .map(segment_seconds_focus)
-            .sum();
-        let active_seconds: i64 = timeline
-            .presence_segments
-            .iter()
-            .filter(|s| matches!(s.state, PresenceState::Active))
-            .map(segment_seconds_presence)
-            .sum();
-        let browser_seconds: i64 = timeline
-            .browser_segments
-            .iter()
-            .map(segment_seconds_browser)
-            .sum();
-        let switch_count = timeline.focus_segments.len().saturating_sub(1) as i64;
+        let mut focus_seconds = 0;
+        let mut focus_count = 0;
+        let mut top_app = None;
+        for row in app_rows {
+            let seconds = row.get::<i64, _>("seconds");
+            focus_seconds += seconds;
+            focus_count += row.get::<i64, _>("segment_count");
+            if top_app
+                .as_ref()
+                .map(|entry: &KeyedDurationEntry| seconds > entry.seconds)
+                .unwrap_or(true)
+            {
+                top_app = Some(KeyedDurationEntry {
+                    key: row.get("process_name"),
+                    label: row.get("display_name"),
+                    seconds,
+                });
+            }
+        }
 
-        let top_app = top_entry(
-            &timeline.focus_segments,
-            |s| s.app.process_name.clone(),
-            |s| s.app.display_name.clone(),
-            segment_seconds_focus,
-        );
-        let top_domain = top_entry(
-            &timeline.browser_segments,
-            |s| s.domain.clone(),
-            |s| s.domain.clone(),
-            segment_seconds_browser,
-        );
+        let mut browser_seconds = 0;
+        let mut top_domain = None;
+        for row in domain_rows {
+            let seconds = row.get::<i64, _>("seconds");
+            browser_seconds += seconds;
+            if top_domain
+                .as_ref()
+                .map(|entry: &KeyedDurationEntry| seconds > entry.seconds)
+                .unwrap_or(true)
+            {
+                let domain = row.get::<String, _>("domain");
+                top_domain = Some(KeyedDurationEntry {
+                    key: domain.clone(),
+                    label: domain,
+                    seconds,
+                });
+            }
+        }
 
         Ok(DaySummary {
             date: date.to_string(),
             focus_seconds,
             active_seconds,
             browser_seconds,
-            switch_count,
+            switch_count: focus_count.saturating_sub(1),
             top_app,
             top_domain,
         })
     }
 
     /// Returns daily summaries for every day in the given month.
-    /// Optimized to fetch all segments in 3 queries and aggregate in memory,
-    /// avoiding the previous N+1 pattern of calling read_day_summary per day.
+    /// Reads pre-aggregated daily rollups in 3 range queries instead of scanning
+    /// raw segments or issuing one query set per day.
     pub async fn read_month_calendar(
         &self,
         year: i32,
@@ -700,160 +1252,119 @@ ORDER BY started_at ASC
         let first_day =
             Date::from_calendar_date(year, month, 1).map_err(|e| anyhow!("invalid month: {e}"))?;
         let days_in_month = days_in_month(year, month) as i64;
+        let last_day = first_day + Duration::days(days_in_month - 1);
+        let start_text = first_day.to_string();
+        let end_text = last_day.to_string();
 
-        let month_start_local =
-            PrimitiveDateTime::new(first_day, time::Time::MIDNIGHT).assume_offset(timezone);
-        let month_end_local = PrimitiveDateTime::new(
-            first_day + Duration::days(days_in_month),
-            time::Time::MIDNIGHT,
-        )
-        .assume_offset(timezone);
-
-        let month_start_utc = month_start_local.to_offset(UtcOffset::UTC);
-        let month_end_utc = month_end_local.to_offset(UtcOffset::UTC);
-        let now_utc = OffsetDateTime::now_utc();
-
-        let month_start_text = format_time(month_start_utc)?;
-        let month_end_text = format_time(month_end_utc)?;
-        let now_text = format_time(now_utc)?;
-
-        let focus_rows = sqlx::query(
-            r#"
-SELECT id, process_name, display_name, exe_path, window_title, is_browser, started_at, ended_at
-FROM focus_segments
-WHERE started_at < ? AND COALESCE(ended_at, ?) > ?
-ORDER BY started_at ASC
-"#,
-        )
-        .bind(&month_end_text)
-        .bind(&now_text)
-        .bind(&month_start_text)
-        .fetch_all(&self.pool)
-        .await?;
-
-        let browser_rows = sqlx::query(
-            r#"
-SELECT id, domain, page_title, browser_window_id, tab_id, started_at, ended_at
-FROM browser_segments
-WHERE started_at < ? AND COALESCE(ended_at, ?) > ?
-ORDER BY started_at ASC
-"#,
-        )
-        .bind(&month_end_text)
-        .bind(&now_text)
-        .bind(&month_start_text)
-        .fetch_all(&self.pool)
-        .await?;
-
-        let presence_rows = sqlx::query(
-            r#"
-SELECT id, state, started_at, ended_at
-FROM presence_segments
-WHERE started_at < ? AND COALESCE(ended_at, ?) > ?
-ORDER BY started_at ASC
-"#,
-        )
-        .bind(&month_end_text)
-        .bind(&now_text)
-        .bind(&month_start_text)
-        .fetch_all(&self.pool)
-        .await?;
-
-        let focus_segments: Vec<FocusSegment> = focus_rows
-            .iter()
-            .map(Self::parse_focus_segment_row)
-            .collect::<Result<Vec<_>>>()?;
-        let browser_segments: Vec<BrowserSegment> = browser_rows
-            .iter()
-            .map(Self::parse_browser_segment_row)
-            .collect::<Result<Vec<_>>>()?;
-        let presence_segments: Vec<PresenceSegment> = presence_rows
-            .iter()
-            .map(Self::parse_presence_segment_row)
-            .collect::<Result<Vec<_>>>()?;
-
-        let mut days = Vec::with_capacity(days_in_month as usize);
+        let mut summaries = BTreeMap::new();
         for day_offset in 0..days_in_month {
             let date = first_day + Duration::days(day_offset);
-            let (day_start_utc, day_end_utc) = day_bounds(date, timezone)?;
-
-            let mut focus_seconds = 0i64;
-            let mut browser_seconds = 0i64;
-            let mut active_seconds = 0i64;
-            let mut focus_count = 0usize;
-            let mut app_buckets: BTreeMap<String, (String, i64)> = BTreeMap::new();
-            let mut domain_buckets: BTreeMap<String, (String, i64)> = BTreeMap::new();
-
-            for seg in &focus_segments {
-                let seg_end = seg.ended_at.unwrap_or(now_utc);
-                if seg.started_at < day_end_utc && seg_end > day_start_utc {
-                    let start = clamp_start(seg.started_at, day_start_utc);
-                    let end = clamp_end(seg_end, day_end_utc, day_start_utc);
-                    let seconds = (end - start).whole_seconds().max(0);
-                    focus_seconds += seconds;
-                    focus_count += 1;
-                    app_buckets
-                        .entry(seg.app.process_name.clone())
-                        .or_insert((seg.app.display_name.clone(), 0))
-                        .1 += seconds;
-                }
-            }
-
-            for seg in &browser_segments {
-                let seg_end = seg.ended_at.unwrap_or(now_utc);
-                if seg.started_at < day_end_utc && seg_end > day_start_utc {
-                    let start = clamp_start(seg.started_at, day_start_utc);
-                    let end = clamp_end(seg_end, day_end_utc, day_start_utc);
-                    let seconds = (end - start).whole_seconds().max(0);
-                    browser_seconds += seconds;
-                    domain_buckets
-                        .entry(seg.domain.clone())
-                        .or_insert((seg.domain.clone(), 0))
-                        .1 += seconds;
-                }
-            }
-
-            for seg in &presence_segments {
-                let seg_end = seg.ended_at.unwrap_or(now_utc);
-                if seg.state == PresenceState::Active
-                    && seg.started_at < day_end_utc
-                    && seg_end > day_start_utc
-                {
-                    let start = clamp_start(seg.started_at, day_start_utc);
-                    let end = clamp_end(seg_end, day_end_utc, day_start_utc);
-                    let seconds = (end - start).whole_seconds().max(0);
-                    active_seconds += seconds;
-                }
-            }
-
-            let top_app = app_buckets
-                .into_iter()
-                .max_by_key(|(_, (_, seconds))| *seconds)
-                .map(|(key, (label, seconds))| KeyedDurationEntry {
-                    key,
-                    label,
-                    seconds,
-                });
-
-            let top_domain = domain_buckets
-                .into_iter()
-                .max_by_key(|(_, (_, seconds))| *seconds)
-                .map(|(key, (label, seconds))| KeyedDurationEntry {
-                    key,
-                    label,
-                    seconds,
-                });
-
-            days.push(DaySummary {
-                date: date.to_string(),
-                focus_seconds,
-                active_seconds,
-                browser_seconds,
-                switch_count: focus_count.saturating_sub(1) as i64,
-                top_app,
-                top_domain,
-            });
+            summaries.insert(
+                date.to_string(),
+                DaySummary {
+                    date: date.to_string(),
+                    focus_seconds: 0,
+                    active_seconds: 0,
+                    browser_seconds: 0,
+                    switch_count: 0,
+                    top_app: None,
+                    top_domain: None,
+                },
+            );
         }
+
+        let app_rows = sqlx::query(
+            r#"
+SELECT date, process_name, display_name, seconds, segment_count
+FROM daily_app_usage
+WHERE date >= ? AND date <= ?
+"#,
+        )
+        .bind(&start_text)
+        .bind(&end_text)
+        .fetch_all(&self.pool)
+        .await?;
+        for row in app_rows {
+            let date = row.get::<String, _>("date");
+            let Some(summary) = summaries.get_mut(&date) else {
+                continue;
+            };
+            let seconds = row.get::<i64, _>("seconds");
+            summary.focus_seconds += seconds;
+            summary.switch_count += row.get::<i64, _>("segment_count");
+            if summary
+                .top_app
+                .as_ref()
+                .map(|entry| seconds > entry.seconds)
+                .unwrap_or(true)
+            {
+                summary.top_app = Some(KeyedDurationEntry {
+                    key: row.get("process_name"),
+                    label: row.get("display_name"),
+                    seconds,
+                });
+            }
+        }
+
+        let domain_rows = sqlx::query(
+            r#"
+SELECT date, domain, seconds
+FROM daily_domain_usage
+WHERE date >= ? AND date <= ?
+"#,
+        )
+        .bind(&start_text)
+        .bind(&end_text)
+        .fetch_all(&self.pool)
+        .await?;
+        for row in domain_rows {
+            let date = row.get::<String, _>("date");
+            let Some(summary) = summaries.get_mut(&date) else {
+                continue;
+            };
+            let seconds = row.get::<i64, _>("seconds");
+            summary.browser_seconds += seconds;
+            if summary
+                .top_domain
+                .as_ref()
+                .map(|entry| seconds > entry.seconds)
+                .unwrap_or(true)
+            {
+                let domain = row.get::<String, _>("domain");
+                summary.top_domain = Some(KeyedDurationEntry {
+                    key: domain.clone(),
+                    label: domain,
+                    seconds,
+                });
+            }
+        }
+
+        let active_rows = sqlx::query(
+            r#"
+SELECT date, seconds
+FROM daily_presence_usage
+WHERE state = 'active' AND date >= ? AND date <= ?
+"#,
+        )
+        .bind(&start_text)
+        .bind(&end_text)
+        .fetch_all(&self.pool)
+        .await?;
+        for row in active_rows {
+            let date = row.get::<String, _>("date");
+            let Some(summary) = summaries.get_mut(&date) else {
+                continue;
+            };
+            summary.active_seconds += row.get::<i64, _>("seconds");
+        }
+
+        let days = summaries
+            .into_values()
+            .map(|mut summary| {
+                summary.switch_count = summary.switch_count.saturating_sub(1);
+                summary
+            })
+            .collect();
 
         Ok(MonthCalendarResponse {
             month: format!("{:04}-{:02}", year, month as u8),
@@ -905,77 +1416,118 @@ ORDER BY started_at ASC
         &self,
         start: Date,
         end: Date,
-        timezone: UtcOffset,
+        _timezone: UtcOffset,
     ) -> Result<PeriodStat> {
-        let start_local =
-            PrimitiveDateTime::new(start, time::Time::MIDNIGHT).assume_offset(timezone);
-        let end_next_day = end
-            .next_day()
-            .ok_or_else(|| anyhow!("period end date overflow"))?;
-        let end_local =
-            PrimitiveDateTime::new(end_next_day, time::Time::MIDNIGHT).assume_offset(timezone);
-
-        let period_start_utc = start_local.to_offset(UtcOffset::UTC);
-        let period_end_utc = end_local.to_offset(UtcOffset::UTC);
-        let now_utc = OffsetDateTime::now_utc();
-
-        let period_start_text = format_time(period_start_utc)?;
-        let period_end_text = format_time(period_end_utc)?;
-        let now_text = format_time(now_utc)?;
-
         let focus_seconds: i64 = sqlx::query_scalar(
             r#"
-SELECT COALESCE(SUM(
-    CASE
-        WHEN strftime('%s', MIN(COALESCE(ended_at, ?), ?)) > strftime('%s', MAX(started_at, ?))
-            THEN strftime('%s', MIN(COALESCE(ended_at, ?), ?)) - strftime('%s', MAX(started_at, ?))
-        ELSE 0
-    END
-), 0)
-FROM focus_segments
-WHERE started_at < ? AND COALESCE(ended_at, ?) > ?
+SELECT COALESCE(SUM(seconds), 0)
+FROM daily_app_usage
+WHERE date >= ? AND date <= ?
 "#,
         )
-        .bind(&now_text)
-        .bind(&period_end_text)
-        .bind(&period_start_text)
-        .bind(&now_text)
-        .bind(&period_end_text)
-        .bind(&period_start_text)
-        .bind(&period_end_text)
-        .bind(&now_text)
-        .bind(&period_start_text)
+        .bind(start.to_string())
+        .bind(end.to_string())
         .fetch_one(&self.pool)
         .await?;
 
         let active_seconds: i64 = sqlx::query_scalar(
             r#"
-SELECT COALESCE(SUM(
-    CASE
-        WHEN strftime('%s', MIN(COALESCE(ended_at, ?), ?)) > strftime('%s', MAX(started_at, ?))
-            THEN strftime('%s', MIN(COALESCE(ended_at, ?), ?)) - strftime('%s', MAX(started_at, ?))
-        ELSE 0
-    END
-), 0)
-FROM presence_segments
-WHERE state = 'active' AND started_at < ? AND COALESCE(ended_at, ?) > ?
+SELECT COALESCE(SUM(seconds), 0)
+FROM daily_presence_usage
+WHERE state = 'active' AND date >= ? AND date <= ?
 "#,
         )
-        .bind(&now_text)
-        .bind(&period_end_text)
-        .bind(&period_start_text)
-        .bind(&now_text)
-        .bind(&period_end_text)
-        .bind(&period_start_text)
-        .bind(&period_end_text)
-        .bind(&now_text)
-        .bind(&period_start_text)
+        .bind(start.to_string())
+        .bind(end.to_string())
         .fetch_one(&self.pool)
         .await?;
 
         Ok(PeriodStat {
             focus_seconds,
             active_seconds,
+        })
+    }
+
+    pub async fn read_app_usage_trend(
+        &self,
+        anchor_date: Date,
+        period: TrendPeriod,
+        limit: usize,
+    ) -> Result<AppUsageTrendResponse> {
+        let (start_date, end_date) = trend_bounds(anchor_date, period)?;
+        let days = date_range(start_date, end_date)?;
+        let day_index = days
+            .iter()
+            .enumerate()
+            .map(|(index, date)| (date.to_string(), index))
+            .collect::<BTreeMap<_, _>>();
+        let rows = sqlx::query(
+            r#"
+SELECT date, process_name, display_name, seconds
+FROM daily_app_usage
+WHERE date >= ? AND date <= ? AND seconds > 0
+ORDER BY date ASC
+"#,
+        )
+        .bind(start_date.to_string())
+        .bind(end_date.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut totals: BTreeMap<String, (String, i64)> = BTreeMap::new();
+        let mut values: BTreeMap<(String, String), i64> = BTreeMap::new();
+        for row in rows {
+            let date = row.get::<String, _>("date");
+            let key = row.get::<String, _>("process_name");
+            let label = row.get::<String, _>("display_name");
+            let seconds = row.get::<i64, _>("seconds");
+            totals
+                .entry(key.clone())
+                .and_modify(|entry| {
+                    entry.0 = label.clone();
+                    entry.1 += seconds;
+                })
+                .or_insert((label, seconds));
+            values.insert((key, date), seconds);
+        }
+
+        let normalized_limit = limit.clamp(1, 12);
+        let series = totals
+            .into_iter()
+            .map(|(key, (label, total_seconds))| (key, label, total_seconds))
+            .collect::<Vec<_>>();
+        let mut series = series;
+        series.sort_by(|left, right| right.2.cmp(&left.2).then_with(|| left.0.cmp(&right.0)));
+
+        let series = series
+            .into_iter()
+            .take(normalized_limit)
+            .map(|(key, label, total_seconds)| {
+                let mut daily_seconds = vec![0; days.len()];
+                for ((candidate_key, date), seconds) in &values {
+                    if candidate_key == &key
+                        && let Some(index) = day_index.get(date)
+                    {
+                        daily_seconds[*index] = *seconds;
+                    }
+                }
+
+                AppUsageTrendSeries {
+                    key,
+                    label,
+                    total_seconds,
+                    daily_seconds,
+                }
+            })
+            .collect();
+
+        Ok(AppUsageTrendResponse {
+            period,
+            start_date: start_date.to_string(),
+            end_date: end_date.to_string(),
+            timezone: self.timezone.to_string(),
+            days: days.into_iter().map(|date| date.to_string()).collect(),
+            series,
         })
     }
 
@@ -1090,6 +1642,222 @@ fn format_time(value: OffsetDateTime) -> Result<String> {
     Ok(value.format(&Rfc3339)?)
 }
 
+fn parse_optional_time(value: Option<String>) -> Result<Option<OffsetDateTime>> {
+    value.map(|value| parse_time(&value)).transpose()
+}
+
+struct DailyChunk {
+    date: String,
+    seconds: i64,
+}
+
+struct RollupBucket {
+    label: String,
+    seconds: i64,
+    segment_count: i64,
+}
+
+fn split_interval_by_local_day(
+    start: OffsetDateTime,
+    end: OffsetDateTime,
+    timezone: UtcOffset,
+) -> Result<Vec<DailyChunk>> {
+    if end <= start {
+        return Ok(Vec::new());
+    }
+
+    let mut cursor = start.to_offset(timezone);
+    let end_local = end.to_offset(timezone);
+    let mut chunks = Vec::new();
+
+    while cursor < end_local {
+        let date = cursor.date();
+        let next_midnight = PrimitiveDateTime::new(date + Duration::days(1), time::Time::MIDNIGHT)
+            .assume_offset(timezone);
+        let chunk_end = if next_midnight < end_local {
+            next_midnight
+        } else {
+            end_local
+        };
+        let seconds = (chunk_end.to_offset(UtcOffset::UTC) - cursor.to_offset(UtcOffset::UTC))
+            .whole_seconds()
+            .max(0);
+
+        if seconds > 0 {
+            chunks.push(DailyChunk {
+                date: date.to_string(),
+                seconds,
+            });
+        }
+
+        cursor = chunk_end;
+    }
+
+    Ok(chunks)
+}
+
+fn add_rollup_chunks(
+    buckets: &mut BTreeMap<(String, String), RollupBucket>,
+    key: &str,
+    label: &str,
+    start: OffsetDateTime,
+    end: OffsetDateTime,
+    timezone: UtcOffset,
+    count_segment: bool,
+) -> Result<()> {
+    for chunk in split_interval_by_local_day(start, end, timezone)? {
+        let entry = buckets
+            .entry((chunk.date, key.to_string()))
+            .or_insert_with(|| RollupBucket {
+                label: label.to_string(),
+                seconds: 0,
+                segment_count: 0,
+            });
+        entry.label = label.to_string();
+        entry.seconds += chunk.seconds;
+        if count_segment {
+            entry.segment_count += 1;
+        }
+    }
+
+    Ok(())
+}
+
+async fn upsert_daily_app_usage_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    date: &str,
+    process_name: &str,
+    display_name: &str,
+    seconds: i64,
+    segment_count: i64,
+) -> Result<()> {
+    if seconds <= 0 && segment_count <= 0 {
+        return Ok(());
+    }
+
+    let updated_at = format_time(OffsetDateTime::now_utc())?;
+    sqlx::query(
+        r#"
+INSERT INTO daily_app_usage (date, process_name, display_name, seconds, segment_count, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(date, process_name) DO UPDATE
+SET display_name = excluded.display_name,
+    seconds = daily_app_usage.seconds + excluded.seconds,
+    segment_count = daily_app_usage.segment_count + excluded.segment_count,
+    updated_at = excluded.updated_at
+"#,
+    )
+    .bind(date)
+    .bind(process_name)
+    .bind(display_name)
+    .bind(seconds)
+    .bind(segment_count)
+    .bind(updated_at)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
+async fn upsert_daily_domain_usage_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    date: &str,
+    domain: &str,
+    seconds: i64,
+    segment_count: i64,
+) -> Result<()> {
+    if seconds <= 0 && segment_count <= 0 {
+        return Ok(());
+    }
+
+    let updated_at = format_time(OffsetDateTime::now_utc())?;
+    sqlx::query(
+        r#"
+INSERT INTO daily_domain_usage (date, domain, seconds, segment_count, updated_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(date, domain) DO UPDATE
+SET seconds = daily_domain_usage.seconds + excluded.seconds,
+    segment_count = daily_domain_usage.segment_count + excluded.segment_count,
+    updated_at = excluded.updated_at
+"#,
+    )
+    .bind(date)
+    .bind(domain)
+    .bind(seconds)
+    .bind(segment_count)
+    .bind(updated_at)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
+async fn upsert_daily_presence_usage_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    date: &str,
+    state: &str,
+    seconds: i64,
+    segment_count: i64,
+) -> Result<()> {
+    if seconds <= 0 && segment_count <= 0 {
+        return Ok(());
+    }
+
+    let updated_at = format_time(OffsetDateTime::now_utc())?;
+    sqlx::query(
+        r#"
+INSERT INTO daily_presence_usage (date, state, seconds, segment_count, updated_at)
+VALUES (?, ?, ?, ?, ?)
+ON CONFLICT(date, state) DO UPDATE
+SET seconds = daily_presence_usage.seconds + excluded.seconds,
+    segment_count = daily_presence_usage.segment_count + excluded.segment_count,
+    updated_at = excluded.updated_at
+"#,
+    )
+    .bind(date)
+    .bind(state)
+    .bind(seconds)
+    .bind(segment_count)
+    .bind(updated_at)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
+}
+
+fn trend_bounds(anchor_date: Date, period: TrendPeriod) -> Result<(Date, Date)> {
+    match period {
+        TrendPeriod::Week => {
+            let weekday_offset = anchor_date.weekday().number_days_from_monday() as i64;
+            let start = anchor_date - Duration::days(weekday_offset);
+            Ok((start, start + Duration::days(6)))
+        }
+        TrendPeriod::Month => {
+            let start = Date::from_calendar_date(anchor_date.year(), anchor_date.month(), 1)
+                .map_err(|error| anyhow!("invalid trend month: {error}"))?;
+            let end = start
+                + Duration::days(days_in_month(anchor_date.year(), anchor_date.month()) as i64 - 1);
+            Ok((start, end))
+        }
+    }
+}
+
+fn date_range(start: Date, end: Date) -> Result<Vec<Date>> {
+    if end < start {
+        return Ok(Vec::new());
+    }
+
+    let mut days = Vec::new();
+    let mut current = start;
+    while current <= end {
+        days.push(current);
+        current = current
+            .next_day()
+            .ok_or_else(|| anyhow!("date range exceeds supported calendar"))?;
+    }
+    Ok(days)
+}
+
 fn parse_presence_state(value: &str) -> Result<PresenceState> {
     match value {
         "active" => Ok(PresenceState::Active),
@@ -1110,13 +1878,6 @@ fn presence_label(value: &PresenceState) -> &'static str {
 /// Computes the duration in seconds for a segment, returning 0 for open segments
 /// or if timestamps are inverted (which can happen with clamping edge cases).
 fn segment_seconds_focus(segment: &FocusSegment) -> i64 {
-    segment
-        .ended_at
-        .map(|end| (end - segment.started_at).whole_seconds().max(0))
-        .unwrap_or(0)
-}
-
-fn segment_seconds_browser(segment: &BrowserSegment) -> i64 {
     segment
         .ended_at
         .map(|end| (end - segment.started_at).whole_seconds().max(0))
@@ -1152,37 +1913,6 @@ fn to_duration_stats(
     rows
 }
 
-/// Finds the entry with the longest total duration across segments, grouped by key.
-fn top_entry<S, KeyFn, LabelFn, SecsFn>(
-    segments: &[S],
-    key_fn: KeyFn,
-    label_fn: LabelFn,
-    secs_fn: SecsFn,
-) -> Option<KeyedDurationEntry>
-where
-    KeyFn: Fn(&S) -> String,
-    LabelFn: Fn(&S) -> String,
-    SecsFn: Fn(&S) -> i64,
-{
-    let mut buckets: BTreeMap<String, (String, i64)> = BTreeMap::new();
-    for segment in segments {
-        let key = key_fn(segment);
-        let label = label_fn(segment);
-        let seconds = secs_fn(segment);
-        let entry = buckets.entry(key).or_insert((label, 0));
-        entry.1 += seconds;
-    }
-
-    buckets
-        .into_iter()
-        .max_by_key(|(_, (_, seconds))| *seconds)
-        .map(|(key, (label, seconds))| KeyedDurationEntry {
-            key,
-            label,
-            seconds,
-        })
-}
-
 /// Returns the number of days in the given year/month.
 fn days_in_month(year: i32, month: time::Month) -> u8 {
     let next_month = month.next();
@@ -1200,7 +1930,7 @@ fn days_in_month(year: i32, month: time::Month) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::{AgentStore, AppConfig, parse_time};
-    use common::PresenceState;
+    use common::{AppInfo, BrowserEventPayload, PresenceState};
     use sqlx::Row;
     use std::path::PathBuf;
     use time::{Duration, OffsetDateTime};
@@ -1218,7 +1948,9 @@ mod tests {
             ..AppConfig::default()
         };
 
-        let store = AgentStore::connect(&config).await.expect("connect store");
+        let store = AgentStore::connect(&config, time::UtcOffset::UTC)
+            .await
+            .expect("connect store");
         let started_at =
             OffsetDateTime::from_unix_timestamp(1_700_000_000).expect("valid timestamp");
         let last_seen_at = started_at + Duration::seconds(30);
@@ -1247,6 +1979,223 @@ mod tests {
         assert_eq!(parse_time(&ended_at).expect("parse ended_at"), last_seen_at);
 
         let _ = std::fs::remove_file(database_path);
+    }
+
+    #[tokio::test]
+    async fn migrations_create_overlap_lookup_indexes() {
+        let unique = format!(
+            "timeline-test-{}.sqlite",
+            OffsetDateTime::now_utc().unix_timestamp_nanos()
+        );
+        let database_path = std::env::temp_dir().join(unique);
+        let config = AppConfig {
+            database_path: database_path.clone(),
+            lockfile_path: temp_lock_path(&database_path),
+            ..AppConfig::default()
+        };
+
+        let store = AgentStore::connect(&config, time::UtcOffset::UTC)
+            .await
+            .expect("connect store");
+
+        assert!(index_exists(&store, "focus_segments", "idx_focus_segments_ended_started").await);
+        assert!(
+            index_exists(
+                &store,
+                "browser_segments",
+                "idx_browser_segments_ended_started"
+            )
+            .await
+        );
+        assert!(
+            index_exists(
+                &store,
+                "presence_segments",
+                "idx_presence_segments_ended_started"
+            )
+            .await
+        );
+
+        let _ = std::fs::remove_file(database_path);
+    }
+
+    async fn index_exists(store: &AgentStore, table: &str, index_name: &str) -> bool {
+        let sql = format!("PRAGMA index_list({table})");
+        let rows = sqlx::query(&sql)
+            .fetch_all(&store.pool)
+            .await
+            .expect("load index list");
+
+        rows.iter()
+            .any(|row| row.get::<String, _>("name") == index_name)
+    }
+
+    #[tokio::test]
+    async fn daily_rollups_power_calendar_summary_and_app_trend() {
+        let (store, database_path) = temp_store().await;
+        let app = AppInfo {
+            process_name: "code.exe".to_string(),
+            display_name: "Code".to_string(),
+            exe_path: None,
+            window_title: None,
+            is_browser: false,
+        };
+        let focus_start = parse_time("2026-06-16T23:30:00Z").expect("focus start");
+        let focus_end = parse_time("2026-06-17T00:30:00Z").expect("focus end");
+        let focus_id = store
+            .start_focus_segment(&app, focus_start)
+            .await
+            .expect("start focus");
+        store
+            .end_focus_segment(focus_id, focus_end)
+            .await
+            .expect("end focus");
+
+        let presence_id = store
+            .start_presence_segment(PresenceState::Active, focus_start)
+            .await
+            .expect("start presence");
+        store
+            .end_presence_segment(presence_id, focus_end)
+            .await
+            .expect("end presence");
+
+        let browser_payload = BrowserEventPayload {
+            domain: "example.com".to_string(),
+            page_title: None,
+            browser_window_id: 1,
+            tab_id: 1,
+            observed_at: None,
+        };
+        let browser_id = store
+            .start_browser_segment(&browser_payload, focus_start)
+            .await
+            .expect("start browser");
+        store
+            .end_browser_segment(browser_id, focus_end)
+            .await
+            .expect("end browser");
+
+        let calendar = store
+            .read_month_calendar(2026, time::Month::June, time::UtcOffset::UTC)
+            .await
+            .expect("read calendar");
+        let june_16 = calendar
+            .days
+            .iter()
+            .find(|day| day.date == "2026-06-16")
+            .expect("june 16 summary");
+        let june_17 = calendar
+            .days
+            .iter()
+            .find(|day| day.date == "2026-06-17")
+            .expect("june 17 summary");
+        assert_eq!(june_16.focus_seconds, 30 * 60);
+        assert_eq!(june_17.focus_seconds, 30 * 60);
+        assert_eq!(june_16.active_seconds, 30 * 60);
+        assert_eq!(june_17.browser_seconds, 30 * 60);
+        assert_eq!(
+            june_16.top_app.as_ref().map(|entry| entry.key.as_str()),
+            Some("code.exe")
+        );
+        assert_eq!(
+            june_17.top_domain.as_ref().map(|entry| entry.key.as_str()),
+            Some("example.com")
+        );
+
+        let summary = store
+            .read_period_summary(
+                time::Date::from_calendar_date(2026, time::Month::June, 17).expect("anchor date"),
+                time::UtcOffset::UTC,
+            )
+            .await
+            .expect("read period summary");
+        assert_eq!(summary.today.focus_seconds, 30 * 60);
+        assert_eq!(summary.week.focus_seconds, 60 * 60);
+
+        let trend = store
+            .read_app_usage_trend(
+                time::Date::from_calendar_date(2026, time::Month::June, 17).expect("anchor date"),
+                common::TrendPeriod::Week,
+                6,
+            )
+            .await
+            .expect("read app trend");
+        let code = trend.series.first().expect("code series");
+        assert_eq!(code.key, "code.exe");
+        assert_eq!(code.total_seconds, 60 * 60);
+        assert_eq!(code.daily_seconds.iter().sum::<i64>(), 60 * 60);
+
+        let _ = std::fs::remove_file(database_path);
+    }
+
+    #[tokio::test]
+    async fn rebuild_daily_rollups_backfills_existing_segments() {
+        let (store, database_path) = temp_store().await;
+        let started_at = "2026-06-17T01:00:00Z";
+        let ended_at = "2026-06-17T01:45:00Z";
+        sqlx::query(
+            r#"
+INSERT INTO focus_segments (
+  process_name,
+  display_name,
+  exe_path,
+  window_title,
+  is_browser,
+  started_at,
+  ended_at,
+  last_seen_at,
+  created_at
+)
+VALUES ('legacy.exe', 'Legacy App', NULL, NULL, 0, ?, ?, ?, ?)
+"#,
+        )
+        .bind(started_at)
+        .bind(ended_at)
+        .bind(ended_at)
+        .bind(started_at)
+        .execute(&store.pool)
+        .await
+        .expect("insert legacy focus row");
+
+        store
+            .rebuild_daily_rollups()
+            .await
+            .expect("rebuild rollups");
+
+        let trend = store
+            .read_app_usage_trend(
+                time::Date::from_calendar_date(2026, time::Month::June, 17).expect("anchor date"),
+                common::TrendPeriod::Week,
+                6,
+            )
+            .await
+            .expect("read app trend");
+
+        assert_eq!(trend.series[0].key, "legacy.exe");
+        assert_eq!(trend.series[0].total_seconds, 45 * 60);
+
+        let _ = std::fs::remove_file(database_path);
+    }
+
+    async fn temp_store() -> (AgentStore, PathBuf) {
+        let unique = format!(
+            "timeline-test-{}.sqlite",
+            OffsetDateTime::now_utc().unix_timestamp_nanos()
+        );
+        let database_path = std::env::temp_dir().join(unique);
+        let config = AppConfig {
+            database_path: database_path.clone(),
+            lockfile_path: temp_lock_path(&database_path),
+            ..AppConfig::default()
+        };
+
+        (
+            AgentStore::connect(&config, time::UtcOffset::UTC)
+                .await
+                .expect("connect store"),
+            database_path,
+        )
     }
 
     fn temp_lock_path(database_path: &std::path::Path) -> PathBuf {

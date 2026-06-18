@@ -31,161 +31,207 @@ export function SettingsPage(props: {
   onUpdateConfig: (payload: UpdateAgentConfigRequest) => Promise<void>
 }) {
   return (
-    <section className="page-stack">
-      <div className="page-content-layout">
-        <div className="page-content-main page-card-stack">
-          <div className="panel page-panel settings-card">
-            <div className="panel-header">
-              <div>
-                <p className="section-kicker">外观</p>
-                <h2>主题</h2>
-              </div>
-            </div>
-            <div className="settings-theme-options">
-              {([
-                { key: 'system', label: '跟随系统' },
-                { key: 'light', label: '明亮' },
-                { key: 'dark', label: '暗色' },
-              ] as const).map((item) => (
-                <button
-                  key={item.key}
-                  type="button"
-                  className={`theme-option ${props.theme === item.key ? 'is-active' : ''}`}
-                  onClick={() => props.onChangeTheme(item.key)}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-          </div>
+    <section className="page-stack settings-page">
+      <h1 className="page-title">设置</h1>
 
-          <div className="panel page-panel settings-card">
-            <div className="panel-header">
-              <div>
-                <p className="section-kicker">服务</p>
-                <h2>本地服务</h2>
+      <div className="settings-winui-layout">
+        <div className="settings-winui-main">
+          {/* Appearance */}
+          <section className="settings-winui-section">
+            <h3 className="settings-winui-section-title">外观</h3>
+            <div className="settings-winui-card">
+              <div className="settings-winui-row">
+                <div className="settings-winui-row-label">主题</div>
+                <div className="settings-winui-row-desc">选择应用的显示模式</div>
+                <div className="settings-winui-row-control">
+                  <div className="settings-theme-options" role="radiogroup" aria-label="主题">
+                    {([
+                      { key: 'system', label: '跟随系统' },
+                      { key: 'light', label: '明亮' },
+                      { key: 'dark', label: '暗色' },
+                    ] as const).map((item) => (
+                      <button
+                        key={item.key}
+                        type="button"
+                        role="radio"
+                        aria-checked={props.theme === item.key}
+                        className={`theme-option ${props.theme === item.key ? 'is-active' : ''}`}
+                        onClick={() => props.onChangeTheme(item.key)}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
-              <RefreshBadge active={props.isSettingsRefreshing} />
             </div>
-            <dl className="settings-list">
+          </section>
+
+          {/* Service info */}
+          <section className="settings-winui-section">
+            <h3 className="settings-winui-section-title">本地服务</h3>
+            <div className="settings-winui-card">
+              <div className="settings-winui-card-header">
+                <div>
+                  <div className="settings-winui-card-title">连接信息</div>
+                  <div className="settings-winui-card-subtitle">当前与本地 timeline 服务的连接状态</div>
+                </div>
+                <RefreshBadge active={props.isSettingsRefreshing} />
+              </div>
               {props.loading ? <SettingsListSkeleton rows={5} /> : (
-                <>
+                <dl className="settings-winui-list">
                   <div>
                     <dt>接口地址</dt>
-                    <dd>{API_BASE_URL}</dd>
+                    <dd className="settings-winui-mono">{API_BASE_URL}</dd>
                   </div>
                   <div>
                     <dt>前端地址</dt>
-                    <dd>{props.agentSettings?.web_ui_url ?? '--'}</dd>
+                    <dd className="settings-winui-mono">{props.agentSettings?.web_ui_url ?? '--'}</dd>
                   </div>
                   <div>
                     <dt>连接状态</dt>
-                    <dd>{props.error ? '离线' : '在线'}</dd>
-                  </div>
-                  <div>
-                    <dt>最后更新</dt>
-                    <dd>{props.lastUpdatedAt ?? '等待连接'}</dd>
-                  </div>
-                  <div>
-                    <dt>启动命令</dt>
-                    <dd>{props.agentSettings?.launch_command ?? '--'}</dd>
-                  </div>
-                </>
-              )}
-            </dl>
-          </div>
-
-          <div className="panel page-panel settings-card">
-            <p className="section-kicker">启动</p>
-            <h2>启动与采集配置</h2>
-            <dl className="settings-list">
-              {props.loading ? <SettingsListSkeleton rows={4} /> : (
-                <>
-                  <div>
-                    <dt>开机自启动</dt>
                     <dd>
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={props.agentSettings?.autostart_enabled ?? false}
-                        aria-label="开机自启动"
-                        className={`toggle-switch ${props.agentSettings?.autostart_enabled ? 'is-active' : ''}`}
-                        disabled={props.savingAutostart}
-                        onClick={() => {
-                          void props.onToggleAutostart(!(props.agentSettings?.autostart_enabled ?? false))
-                        }}
-                      >
-                        <span className="toggle-switch-track" aria-hidden="true">
-                          <span className="toggle-switch-thumb" />
-                        </span>
-                        <span className="toggle-switch-text">
-                          {props.savingAutostart
-                            ? '保存中…'
-                            : props.agentSettings?.autostart_enabled
-                              ? '已启用'
-                              : '已禁用'}
-                        </span>
-                      </button>
+                      <span className={`settings-status-dot ${props.error ? 'is-offline' : 'is-online'}`} />
+                      {props.error ? '离线' : '在线'}
                     </dd>
                   </div>
                   <div>
-                    <dt>托盘菜单</dt>
-                    <dd>{props.agentSettings?.tray_enabled ? '已启用' : '已禁用'}</dd>
+                    <dt>最后更新</dt>
+                    <dd className="settings-winui-mono">{props.lastUpdatedAt ?? '等待连接'}</dd>
                   </div>
                   <div>
-                    <dt>日期</dt>
-                    <dd>{props.selectedDate}</dd>
+                    <dt>启动命令</dt>
+                    <dd className="settings-winui-mono">{props.agentSettings?.launch_command ?? '--'}</dd>
                   </div>
-                  <div>
-                    <dt>时区</dt>
-                    <dd>{props.timezone}</dd>
-                  </div>
-                </>
-              )}
-            </dl>
-
-            {props.loading || !props.agentSettings ? (
-              <SettingsConfigSkeleton />
-            ) : (
-              <SettingsConfigForm
-                key={settingsFormKey(props.agentSettings)}
-                settings={props.agentSettings}
-                savingConfig={props.savingConfig}
-                onUpdateConfig={props.onUpdateConfig}
-              />
-            )}
-
-            {!props.loading && props.settingsError ? <div className="settings-error">{props.settingsError}</div> : null}
-            {!props.loading && props.settingsNotice ? <div className="settings-notice">{props.settingsNotice}</div> : null}
-          </div>
-        </div>
-
-        <div className="page-content-side">
-          <div className="panel page-panel settings-card settings-monitor-card">
-            <p className="section-kicker">监视器</p>
-            <h2>监视器状态</h2>
-            <div className="monitor-list">
-              {props.loading ? (
-                <MonitorListSkeleton />
-              ) : (
-                props.agentSettings?.monitors.map((monitor) => (
-                  <article key={monitor.key} className="monitor-card">
-                    <div className="monitor-head">
-                      <strong>{monitor.label}</strong>
-                      <span className={`monitor-badge is-${monitor.status}`}>{monitor.status}</span>
-                    </div>
-                    <p>{monitor.detail}</p>
-                    <small>
-                      {monitor.last_seen ? `最后活跃 ${new Date(monitor.last_seen).toLocaleTimeString()}` : '等待首次心跳'}
-                    </small>
-                  </article>
-                )) ?? <div className="empty-card">读取中…</div>
+                </dl>
               )}
             </div>
-          </div>
+          </section>
+
+          {/* Startup & collection */}
+          <section className="settings-winui-section">
+            <h3 className="settings-winui-section-title">启动与采集</h3>
+            <div className="settings-winui-card">
+              {props.loading || !props.agentSettings ? (
+                <SettingsConfigSkeleton />
+              ) : (
+                <>
+                  <div className="settings-winui-row is-action">
+                    <div>
+                      <div className="settings-winui-row-label">开机自启动</div>
+                      <div className="settings-winui-row-desc">登录 Windows 时自动启动 timeline</div>
+                    </div>
+                    <div className="settings-winui-row-control">
+                      <ToggleSwitch
+                        checked={props.agentSettings.autostart_enabled}
+                        saving={props.savingAutostart}
+                        onToggle={() => {
+                          void props.onToggleAutostart(!props.agentSettings!.autostart_enabled)
+                        }}
+                      />
+                    </div>
+                  </div>
+                  <div className="settings-winui-divider" />
+                  <div className="settings-winui-row">
+                    <div className="settings-winui-row-label">托盘菜单</div>
+                    <div className="settings-winui-row-desc">在系统托盘显示图标和菜单</div>
+                    <div className="settings-winui-row-control">
+                      <span className="settings-winui-value">
+                        {props.agentSettings.tray_enabled ? '已启用' : '已禁用'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="settings-winui-divider" />
+                  <div className="settings-winui-row">
+                    <div className="settings-winui-row-label">当前日期</div>
+                    <div className="settings-winui-row-desc">时间线页面默认选中的日期</div>
+                    <div className="settings-winui-row-control">
+                      <span className="settings-winui-value">{props.selectedDate}</span>
+                    </div>
+                  </div>
+                  <div className="settings-winui-divider" />
+                  <div className="settings-winui-row">
+                    <div className="settings-winui-row-label">系统时区</div>
+                    <div className="settings-winui-row-desc">本地时间显示使用的时区</div>
+                    <div className="settings-winui-row-control">
+                      <span className="settings-winui-value">{props.timezone}</span>
+                    </div>
+                  </div>
+
+                  <div className="settings-winui-divider is-section" />
+
+                  <SettingsConfigForm
+                    key={settingsFormKey(props.agentSettings)}
+                    settings={props.agentSettings}
+                    savingConfig={props.savingConfig}
+                    onUpdateConfig={props.onUpdateConfig}
+                  />
+                </>
+              )}
+
+              {!props.loading && props.settingsError ? <div className="settings-error">{props.settingsError}</div> : null}
+              {!props.loading && props.settingsNotice ? <div className="settings-notice">{props.settingsNotice}</div> : null}
+            </div>
+          </section>
+        </div>
+
+        {/* Monitors */}
+        <div className="settings-winui-side">
+          <section className="settings-winui-section">
+            <h3 className="settings-winui-section-title">监视器</h3>
+            <div className="settings-winui-card">
+              <div className="settings-winui-card-subtitle">各采集模块的运行状态</div>
+              <div className="monitor-list">
+                {props.loading ? (
+                  <MonitorListSkeleton />
+                ) : (
+                  props.agentSettings?.monitors.map((monitor) => (
+                    <article key={monitor.key} className={`monitor-card is-${monitor.status}`}>
+                      <div className="monitor-card-status-bar" aria-hidden="true" />
+                      <div className="monitor-card-body">
+                        <div className="monitor-head">
+                          <strong>{monitor.label}</strong>
+                          <span className={`monitor-badge is-${monitor.status}`}>{monitor.status}</span>
+                        </div>
+                        <p>{monitor.detail}</p>
+                        <small>
+                          {monitor.last_seen ? `最后活跃 ${new Date(monitor.last_seen).toLocaleTimeString()}` : '等待首次心跳'}
+                        </small>
+                      </div>
+                    </article>
+                  )) ?? <div className="empty-card">读取中…</div>
+                )}
+              </div>
+            </div>
+          </section>
         </div>
       </div>
     </section>
+  )
+}
+
+function ToggleSwitch(props: {
+  checked: boolean
+  saving: boolean
+  onToggle: () => void
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={props.checked}
+      aria-label="开机自启动"
+      className={`toggle-switch ${props.checked ? 'is-active' : ''}`}
+      disabled={props.saving}
+      onClick={props.onToggle}
+    >
+      <span className="toggle-switch-track" aria-hidden="true">
+        <span className="toggle-switch-thumb" />
+      </span>
+      <span className="toggle-switch-text">
+        {props.saving ? '保存中…' : props.checked ? '开' : '关'}
+      </span>
+    </button>
   )
 }
 
@@ -207,118 +253,159 @@ function SettingsConfigForm(props: {
   }
 
   return (
-    <div className="settings-config-grid" role="group" aria-label="采集、提醒与过滤设置">
-      <label className="settings-config-field">
-        <span>空闲阈值（秒）</span>
-        <input
-          type="number"
-          min={15}
-          max={1800}
-          step={5}
-          value={values.idleThresholdSecs}
-          onChange={(event) =>
-            patchValues({ idleThresholdSecs: Number(event.target.value) || 0 })}
-        />
-        <small className="settings-config-help">
-          超过该时长无键盘/鼠标输入将判定为 Idle，建议 60~120 秒。
-        </small>
-      </label>
+    <div className="settings-form" role="group" aria-label="采集、提醒与过滤设置">
+      <div className="settings-form-section">
+        <h4 className="settings-form-section-title">采集频率</h4>
+        <div className="settings-winui-row">
+          <div>
+            <div className="settings-winui-row-label">空闲阈值</div>
+            <div className="settings-winui-row-desc">超过该时长无输入将判定为 Idle</div>
+          </div>
+          <div className="settings-winui-row-control">
+            <div className="settings-input-with-suffix">
+              <input
+                type="number"
+                min={15}
+                max={1800}
+                step={5}
+                value={values.idleThresholdSecs}
+                onChange={(event) =>
+                  patchValues({ idleThresholdSecs: Number(event.target.value) || 0 })}
+              />
+              <span className="settings-input-suffix">秒</span>
+            </div>
+          </div>
+        </div>
+        <div className="settings-winui-divider" />
+        <div className="settings-winui-row">
+          <div>
+            <div className="settings-winui-row-label">轮询间隔</div>
+            <div className="settings-winui-row-desc">检测前台窗口的时间间隔</div>
+          </div>
+          <div className="settings-winui-row-control">
+            <div className="settings-input-with-suffix">
+              <input
+                type="number"
+                min={250}
+                max={5000}
+                step={50}
+                value={values.pollIntervalMillis}
+                onChange={(event) =>
+                  patchValues({ pollIntervalMillis: Number(event.target.value) || 0 })}
+              />
+              <span className="settings-input-suffix">毫秒</span>
+            </div>
+          </div>
+        </div>
+      </div>
 
-      <label className="settings-config-field">
-        <span>轮询间隔（毫秒）</span>
-        <input
-          type="number"
-          min={250}
-          max={5000}
-          step={50}
-          value={values.pollIntervalMillis}
-          onChange={(event) =>
-            patchValues({ pollIntervalMillis: Number(event.target.value) || 0 })}
-        />
-        <small className="settings-config-help">
-          越小越实时但资源占用更高；建议保持 500~1500 毫秒。
-        </small>
-      </label>
+      <div className="settings-form-section">
+        <h4 className="settings-form-section-title">健康提醒</h4>
+        <div className="settings-winui-row is-action">
+          <div>
+            <div className="settings-winui-row-label">健康休息提醒</div>
+            <div className="settings-winui-row-desc">连续活跃超过阈值后发送系统提醒</div>
+          </div>
+          <div className="settings-winui-row-control">
+            <label className="settings-config-check">
+              <input
+                type="checkbox"
+                checked={values.healthReminderEnabled}
+                onChange={(event) =>
+                  patchValues({ healthReminderEnabled: event.target.checked })}
+              />
+              <span className="toggle-switch-text">
+                {values.healthReminderEnabled ? '开' : '关'}
+              </span>
+            </label>
+          </div>
+        </div>
+        <div className="settings-winui-divider" />
+        <div className="settings-winui-row">
+          <div>
+            <div className="settings-winui-row-label">提醒阈值</div>
+            <div className="settings-winui-row-desc">进入 Idle/Locked 后会重新计时</div>
+          </div>
+          <div className="settings-winui-row-control">
+            <div className="settings-input-with-suffix">
+              <input
+                type="number"
+                min={300}
+                max={21600}
+                step={60}
+                value={values.healthReminderThresholdSecs}
+                disabled={!values.healthReminderEnabled}
+                onChange={(event) =>
+                  patchValues({ healthReminderThresholdSecs: Number(event.target.value) || 0 })}
+              />
+              <span className="settings-input-suffix">秒</span>
+            </div>
+          </div>
+        </div>
+      </div>
 
-      <label className="settings-config-check">
-        <input
-          type="checkbox"
-          checked={values.healthReminderEnabled}
-          onChange={(event) =>
-            patchValues({ healthReminderEnabled: event.target.checked })}
-        />
-        <span>
-          健康休息提醒
-          <small>连续活跃超过阈值后发送系统提醒，建议保持开启。</small>
-        </span>
-      </label>
+      <div className="settings-form-section">
+        <h4 className="settings-form-section-title">隐私记录</h4>
+        <div className="settings-winui-row is-action">
+          <div>
+            <div className="settings-winui-row-label">记录窗口标题</div>
+            <div className="settings-winui-row-desc">关闭可减少隐私暴露</div>
+          </div>
+          <div className="settings-winui-row-control">
+            <label className="settings-config-check">
+              <input
+                type="checkbox"
+                checked={values.recordWindowTitles}
+                onChange={(event) => patchValues({ recordWindowTitles: event.target.checked })}
+              />
+              <span className="toggle-switch-text">
+                {values.recordWindowTitles ? '开' : '关'}
+              </span>
+            </label>
+          </div>
+        </div>
+        <div className="settings-winui-divider" />
+        <div className="settings-winui-row is-action">
+          <div>
+            <div className="settings-winui-row-label">记录页面标题</div>
+            <div className="settings-winui-row-desc">关闭后浏览器仅记录域名</div>
+          </div>
+          <div className="settings-winui-row-control">
+            <label className="settings-config-check">
+              <input
+                type="checkbox"
+                checked={values.recordPageTitles}
+                onChange={(event) => patchValues({ recordPageTitles: event.target.checked })}
+              />
+              <span className="toggle-switch-text">
+                {values.recordPageTitles ? '开' : '关'}
+              </span>
+            </label>
+          </div>
+        </div>
+      </div>
 
-      <label className="settings-config-field">
-        <span>休息提醒阈值（秒）</span>
-        <input
-          type="number"
-          min={300}
-          max={21600}
-          step={60}
-          value={values.healthReminderThresholdSecs}
-          disabled={!values.healthReminderEnabled}
-          onChange={(event) =>
-            patchValues({ healthReminderThresholdSecs: Number(event.target.value) || 0 })}
-        />
-        <small className="settings-config-help">
-          默认 3000 秒（50 分钟），进入 Idle/Locked 后会重新计时。
-        </small>
-      </label>
+      <div className="settings-form-section">
+        <h4 className="settings-form-section-title">过滤列表</h4>
+        <label className="settings-config-field is-wide">
+          <span>忽略应用（每行一个，如 chrome.exe）</span>
+          <textarea
+            rows={4}
+            value={values.ignoredAppsText}
+            onChange={(event) => patchValues({ ignoredAppsText: event.target.value })}
+          />
+        </label>
+        <label className="settings-config-field is-wide">
+          <span>忽略域名（每行一个，如 example.com）</span>
+          <textarea
+            rows={4}
+            value={values.ignoredDomainsText}
+            onChange={(event) => patchValues({ ignoredDomainsText: event.target.value })}
+          />
+        </label>
+      </div>
 
-      <label className="settings-config-check">
-        <input
-          type="checkbox"
-          checked={values.recordWindowTitles}
-          onChange={(event) => patchValues({ recordWindowTitles: event.target.checked })}
-        />
-        <span>
-          记录窗口标题
-          <small>用于更细粒度窗口识别，关闭可减少隐私暴露。</small>
-        </span>
-      </label>
-
-      <label className="settings-config-check">
-        <input
-          type="checkbox"
-          checked={values.recordPageTitles}
-          onChange={(event) => patchValues({ recordPageTitles: event.target.checked })}
-        />
-        <span>
-          记录页面标题
-          <small>浏览器页面将保留标题，关闭后仅记录域名。</small>
-        </span>
-      </label>
-
-      <label className="settings-config-field is-wide">
-        <span>忽略应用（每行一个，如 chrome.exe）</span>
-        <textarea
-          rows={4}
-          value={values.ignoredAppsText}
-          onChange={(event) => patchValues({ ignoredAppsText: event.target.value })}
-        />
-        <small className="settings-config-help">
-          命中列表的应用将不写入焦点记录，支持换行或逗号分隔。
-        </small>
-      </label>
-
-      <label className="settings-config-field is-wide">
-        <span>忽略域名（每行一个，如 example.com）</span>
-        <textarea
-          rows={4}
-          value={values.ignoredDomainsText}
-          onChange={(event) => patchValues({ ignoredDomainsText: event.target.value })}
-        />
-        <small className="settings-config-help">
-          命中列表的域名不会进入浏览器记录，适合排除隐私或噪声站点。
-        </small>
-      </label>
-
-      <div className="settings-config-actions">
+      <div className="settings-form-actions">
         <button
           type="button"
           className="settings-save-button"
@@ -353,34 +440,28 @@ function SettingsListSkeleton(props: { rows: number }) {
 
 function SettingsConfigSkeleton() {
   return (
-    <div className="settings-config-grid settings-config-grid-skeleton" aria-hidden="true">
+    <div className="settings-form settings-form-skeleton" aria-hidden="true">
       {Array.from({ length: 2 }, (_, index) => (
-        <div key={`settings-field-${index}`} className="settings-config-field settings-config-field-skeleton">
-          <span className="skeleton-block skeleton-inline skeleton-field-label" />
-          <span className="skeleton-block skeleton-input" />
-          <span className="skeleton-block skeleton-inline skeleton-field-help" />
+        <div key={`settings-section-${index}`} className="settings-form-section">
+          <span className="skeleton-block skeleton-inline skeleton-section-title" />
+          <div className="settings-winui-row">
+            <div>
+              <span className="skeleton-block skeleton-inline skeleton-field-label" />
+              <span className="skeleton-block skeleton-inline skeleton-field-help" />
+            </div>
+            <span className="skeleton-block skeleton-input" />
+          </div>
+          <div className="settings-winui-divider" />
+          <div className="settings-winui-row">
+            <div>
+              <span className="skeleton-block skeleton-inline skeleton-field-label" />
+              <span className="skeleton-block skeleton-inline skeleton-field-help" />
+            </div>
+            <span className="skeleton-block skeleton-input" />
+          </div>
         </div>
       ))}
-      {Array.from({ length: 2 }, (_, index) => (
-        <div key={`settings-check-${index}`} className="settings-config-check settings-config-check-skeleton">
-          <span className="skeleton-block skeleton-checkbox" />
-          <span className="settings-config-check-copy">
-            <span className="skeleton-block skeleton-inline skeleton-check-title" />
-            <span className="skeleton-block skeleton-inline skeleton-check-help" />
-          </span>
-        </div>
-      ))}
-      {Array.from({ length: 2 }, (_, index) => (
-        <div
-          key={`settings-textarea-${index}`}
-          className="settings-config-field settings-config-field-skeleton is-wide"
-        >
-          <span className="skeleton-block skeleton-inline skeleton-field-label" />
-          <span className="skeleton-block skeleton-textarea" />
-          <span className="skeleton-block skeleton-inline skeleton-field-help" />
-        </div>
-      ))}
-      <div className="settings-config-actions settings-config-actions-skeleton">
+      <div className="settings-form-actions settings-form-actions-skeleton">
         <span className="skeleton-block skeleton-button" />
       </div>
     </div>
@@ -392,12 +473,15 @@ function MonitorListSkeleton() {
     <>
       {Array.from({ length: 3 }, (_, index) => (
         <article key={`monitor-skeleton-${index}`} className="monitor-card monitor-card-skeleton">
-          <div className="monitor-head">
-            <span className="skeleton-block skeleton-inline skeleton-monitor-title" />
-            <span className="skeleton-block skeleton-inline skeleton-monitor-badge" />
+          <div className="monitor-card-status-bar" aria-hidden="true" />
+          <div className="monitor-card-body">
+            <div className="monitor-head">
+              <span className="skeleton-block skeleton-inline skeleton-monitor-title" />
+              <span className="skeleton-block skeleton-inline skeleton-monitor-badge" />
+            </div>
+            <span className="skeleton-block skeleton-inline skeleton-monitor-line" />
+            <span className="skeleton-block skeleton-inline skeleton-monitor-line skeleton-monitor-line-short" />
           </div>
-          <span className="skeleton-block skeleton-inline skeleton-monitor-line" />
-          <span className="skeleton-block skeleton-inline skeleton-monitor-line skeleton-monitor-line-short" />
         </article>
       ))}
     </>

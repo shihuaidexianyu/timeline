@@ -250,3 +250,31 @@ pub struct PeriodSummaryResponse {
     pub week: PeriodStat,
     pub month: PeriodStat,
 }
+
+/// Supported periods for application usage trend charts.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TrendPeriod {
+    Week,
+    Month,
+}
+
+/// A single application series in the daily usage trend response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppUsageTrendSeries {
+    pub key: String,
+    pub label: String,
+    pub total_seconds: i64,
+    pub daily_seconds: Vec<i64>,
+}
+
+/// GET /api/stats/apps/trend response — Top N applications by daily usage.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppUsageTrendResponse {
+    pub period: TrendPeriod,
+    pub start_date: String,
+    pub end_date: String,
+    pub timezone: String,
+    pub days: Vec<String>,
+    pub series: Vec<AppUsageTrendSeries>,
+}

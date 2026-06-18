@@ -1,11 +1,13 @@
 import type {
   AgentSettingsResponse,
   ApiEnvelope,
+  AppUsageTrendResponse,
   DurationStat,
   FocusStats,
   MonthCalendarResponse,
   PeriodSummaryResponse,
   TimelineDayResponse,
+  TrendPeriod,
   UpdateAgentConfigRequest,
   UpdateAgentConfigResponse,
   UpdateAutostartRequest,
@@ -119,6 +121,20 @@ export function getTimeline(date?: string, signal?: AbortSignal) {
 
 export function getAppStats(date: string, signal?: AbortSignal) {
   return request<DurationStat[]>(`/api/stats/apps?date=${date}`, { signal })
+}
+
+export function getAppUsageTrend(
+  date: string,
+  period: TrendPeriod,
+  limit = 6,
+  signal?: AbortSignal,
+) {
+  const query = new URLSearchParams({
+    date,
+    period,
+    limit: String(limit),
+  })
+  return request<AppUsageTrendResponse>(`/api/stats/apps/trend?${query}`, { signal })
 }
 
 export function getDomainStats(date: string, signal?: AbortSignal) {

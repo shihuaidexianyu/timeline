@@ -52,8 +52,9 @@ async fn run_backend_mode(backend_args: &[String]) -> Result<()> {
     let timezone = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
     let started_at = OffsetDateTime::now_utc();
     let _lock = acquire_instance_lock(&config.lockfile_path)?;
-    let store = AgentStore::connect(&config).await?;
+    let store = AgentStore::connect(&config, timezone).await?;
     store.restore_unclosed_segments().await?;
+    store.ensure_daily_rollups().await?;
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
     let state = AgentState::new(

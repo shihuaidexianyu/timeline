@@ -9,34 +9,63 @@ import type {
 
 const DAY_SECONDS = 24 * 60 * 60
 const MERGE_GAP_SECONDS = 60
-const APP_PRESET_COLORS: string[] = [
-  '#FF6B6B',
-  '#4ECDC4',
-  '#45B7D1',
-  '#FFA07A',
-  '#FECB93',
-  '#B19CD9',
-  '#98D8C8',
-  '#F7DC6F',
-  '#FF5252',
-  '#26A69A',
-  '#E84C3F',
-  '#CE93D8',
-]
-const DOMAIN_PRESET_COLORS: string[] = [
-  '#45B7D1',
-  '#4ECDC4',
-  '#FF6B6B',
-  '#B19CD9',
-  '#FECB93',
-  '#FFA07A',
-  '#98D8C8',
-  '#F7DC6F',
-  '#E84C3F',
-  '#26A69A',
-  '#FF5252',
-  '#CE93D8',
-]
+
+function isDarkTheme(): boolean {
+  if (typeof document === 'undefined') {
+    return false
+  }
+  return document.documentElement.getAttribute('data-theme') === 'dark'
+}
+
+function getAppPresetColors(): string[] {
+  if (isDarkTheme()) {
+    return [
+      '#5AB4D8',
+      '#5AD4C2',
+      '#A994E8',
+      '#E0A060',
+      '#D6C45A',
+      '#8AB8F0',
+      '#78D878',
+      '#E07888',
+    ]
+  }
+  return [
+    '#2E7D9B',
+    '#2E9B8C',
+    '#7D6BB8',
+    '#C97B4C',
+    '#B89A3A',
+    '#4A7FD8',
+    '#4A9B5A',
+    '#C95A6B',
+  ]
+}
+
+function getDomainPresetColors(): string[] {
+  if (isDarkTheme()) {
+    return [
+      '#8AB8F0',
+      '#5AD4C2',
+      '#E07888',
+      '#A994E8',
+      '#D6C45A',
+      '#E0A060',
+      '#78D878',
+      '#5AB4D8',
+    ]
+  }
+  return [
+    '#4A7FD8',
+    '#2E9B8C',
+    '#C95A6B',
+    '#7D6BB8',
+    '#B89A3A',
+    '#C97B4C',
+    '#4A9B5A',
+    '#2E7D9B',
+  ]
+}
 
 export type TooltipDatum = {
   x: number
@@ -555,7 +584,7 @@ function assignDistinctColors(
 
 function buildDistinctPalette(count: number, namespace: 'app' | 'domain') {
   const preset =
-    namespace === 'app' ? [...APP_PRESET_COLORS] : [...DOMAIN_PRESET_COLORS]
+    namespace === 'app' ? getAppPresetColors() : getDomainPresetColors()
 
   if (count <= preset.length) {
     return preset.slice(0, count)
@@ -586,13 +615,14 @@ function presenceLabel(state: PresenceSegment['state']) {
 }
 
 function presenceColor(state: PresenceSegment['state']) {
+  const dark = isDarkTheme()
   if (state === 'active') {
-    return '#10b981'
+    return dark ? '#4ad4a3' : '#3fb68a'
   }
   if (state === 'idle') {
-    return '#8090a4'
+    return dark ? '#8e98a6' : '#7d8795'
   }
-  return '#8da0b6'
+  return dark ? '#6d7582' : '#9aa3af'
 }
 
 export function todayString() {

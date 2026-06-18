@@ -367,7 +367,7 @@ export function TimelineChart(props: {
                           style={{
                             left: `${leftPct}%`,
                             width: `${Math.max(widthPct, 0.7)}%`,
-                            backgroundColor: segment.color,
+                            background: segment.color,
                           }}
                           title={buildTooltipText(segment)}
                           onPointerEnter={() => props.onSegmentHover?.(segment.id)}

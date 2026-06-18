@@ -136,6 +136,24 @@ export type PeriodSummaryResponse = {
   month: PeriodStat
 }
 
+export type TrendPeriod = 'week' | 'month'
+
+export type AppUsageTrendSeries = {
+  key: string
+  label: string
+  total_seconds: number
+  daily_seconds: number[]
+}
+
+export type AppUsageTrendResponse = {
+  period: TrendPeriod
+  start_date: string
+  end_date: string
+  timezone: string
+  days: string[]
+  series: AppUsageTrendSeries[]
+}
+
 export type ApiEnvelope<T> = {
   ok: boolean
   data: T | null

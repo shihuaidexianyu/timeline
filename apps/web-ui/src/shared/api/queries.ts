@@ -6,6 +6,7 @@ import {
 } from '@tanstack/react-query'
 import {
   getAgentSettings,
+  getAppUsageTrend,
   getMonthCalendar,
   getPeriodSummary,
   getTimeline,
@@ -14,6 +15,7 @@ import {
 } from './client'
 import type {
   AgentSettingsResponse,
+  TrendPeriod,
   UpdateAgentConfigRequest,
   UpdateAutostartRequest,
 } from './types'
@@ -23,6 +25,11 @@ export const apiQueryKeys = {
     ['timeline-day', date ?? 'current'] as const,
   periodSummary: (date: string | null | undefined) =>
     ['period-summary', date ?? 'current'] as const,
+  appUsageTrend: (
+    date: string | null | undefined,
+    period: TrendPeriod,
+    limit: number,
+  ) => ['app-usage-trend', date ?? 'none', period, limit] as const,
   monthCalendar: (month: string | null | undefined) =>
     ['month-calendar', month ?? 'none'] as const,
   agentSettings: () => ['agent-settings'] as const,
@@ -55,6 +62,23 @@ export function usePeriodSummaryQuery(
     queryFn: ({ signal }) => getPeriodSummary(date ?? undefined, signal),
     placeholderData: keepPreviousData,
     ...options,
+  })
+}
+
+export function useAppUsageTrendQuery(
+  date: string | null | undefined,
+  period: TrendPeriod,
+  limit = 6,
+  options?: QueryHookOptions,
+) {
+  const { enabled, ...queryOptions } = options ?? {}
+
+  return useQuery({
+    queryKey: apiQueryKeys.appUsageTrend(date, period, limit),
+    queryFn: ({ signal }) => getAppUsageTrend(date ?? '', period, limit, signal),
+    enabled: Boolean(date) && (enabled ?? true),
+    placeholderData: keepPreviousData,
+    ...queryOptions,
   })
 }
 

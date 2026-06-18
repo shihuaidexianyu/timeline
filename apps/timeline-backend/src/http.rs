@@ -12,9 +12,10 @@ use axum::{
     routing::{get, post},
 };
 use common::{
-    AgentMonitorStatus, AgentSettingsResponse, ApiResponse, BrowserEventPayload, HealthResponse,
-    MonthCalendarResponse, PeriodSummaryResponse, UpdateAgentConfigRequest,
-    UpdateAgentConfigResponse, UpdateAutostartRequest, UpdateAutostartResponse,
+    AgentMonitorStatus, AgentSettingsResponse, ApiResponse, AppUsageTrendResponse,
+    BrowserEventPayload, HealthResponse, MonthCalendarResponse, PeriodSummaryResponse, TrendPeriod,
+    UpdateAgentConfigRequest, UpdateAgentConfigResponse, UpdateAutostartRequest,
+    UpdateAutostartResponse,
 };
 use serde::Deserialize;
 use time::format_description::parse;
@@ -32,6 +33,7 @@ pub fn build_router(state: AgentState) -> Router {
         .route("/health", get(get_health))
         .route("/api/timeline/day", get(get_timeline_day))
         .route("/api/stats/apps", get(get_app_stats))
+        .route("/api/stats/apps/trend", get(get_app_usage_trend))
         .route("/api/stats/domains", get(get_domain_stats))
         .route("/api/stats/focus", get(get_focus_stats))
         .route("/api/settings", get(get_settings))
@@ -60,6 +62,13 @@ pub fn build_router(state: AgentState) -> Router {
 #[derive(Debug, Deserialize)]
 struct DayQuery {
     date: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AppTrendQuery {
+    date: Option<String>,
+    period: Option<String>,
+    limit: Option<usize>,
 }
 
 async fn get_health(
@@ -94,6 +103,19 @@ async fn get_app_stats(
     let date = parse_or_today(query.date.as_deref(), state.timezone())?;
     let stats = state.store().read_app_stats(date, state.timezone()).await?;
     Ok(Json(ApiResponse::ok(stats)))
+}
+
+async fn get_app_usage_trend(
+    State(state): State<AgentState>,
+    Query(query): Query<AppTrendQuery>,
+) -> Result<Json<ApiResponse<AppUsageTrendResponse>>, AppError> {
+    let date = parse_or_today(query.date.as_deref(), state.timezone())?;
+    let period = parse_trend_period(query.period.as_deref())?;
+    let trend = state
+        .store()
+        .read_app_usage_trend(date, period, query.limit.unwrap_or(6))
+        .await?;
+    Ok(Json(ApiResponse::ok(trend)))
 }
 
 async fn get_domain_stats(
@@ -252,6 +274,17 @@ fn parse_or_today(value: Option<&str>, timezone: time::UtcOffset) -> Result<Date
     }
 
     Ok(OffsetDateTime::now_utc().to_offset(timezone).date())
+}
+
+fn parse_trend_period(value: Option<&str>) -> Result<TrendPeriod, AppError> {
+    match value.unwrap_or("week") {
+        "week" => Ok(TrendPeriod::Week),
+        "month" => Ok(TrendPeriod::Month),
+        _ => Err(AppError::bad_request(
+            "invalid_period",
+            "period must be week or month",
+        )),
+    }
 }
 
 /// Parses a "YYYY-MM" string into (year, Month), defaulting to the current month.

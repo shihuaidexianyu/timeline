@@ -4,6 +4,7 @@ import { useHashRoute } from './page-route'
 import { useSelectedDateState } from './use-selected-date-state'
 import {
   useAgentSettingsQuery,
+  useAppUsageTrendQuery,
   useMonthCalendarQuery,
   usePeriodSummaryQuery,
   useTimelineDayQuery,
@@ -23,6 +24,7 @@ import { useTheme } from '../hooks/use-theme'
 import { SettingsPage } from '../pages/settings-page'
 import { StatsPage } from '../pages/stats-page'
 import { TimelinePage } from '../pages/timeline-page'
+import type { TrendPeriod } from '../shared/api'
 import type { TimelineSegmentKind } from '../features/timeline/timeline-selectors'
 
 export function AppController() {
@@ -37,6 +39,7 @@ export function AppController() {
   const [timelineSegmentKind, setTimelineSegmentKind] =
     useState<TimelineSegmentKind>('all')
   const [focusedSegmentId, setFocusedSegmentId] = useState<string | null>(null)
+  const [appTrendPeriod, setAppTrendPeriod] = useState<TrendPeriod>('week')
 
   const timelineQuery = useTimelineDayQuery(null)
   const timeline = timelineQuery.data ?? null
@@ -64,6 +67,10 @@ export function AppController() {
       (dateState.selectedDate === periodQuery.data?.date ? periodQuery.data : undefined)
     : periodQuery.data
   const calendarQuery = useMonthCalendarQuery(dateState.calendarMonth)
+  const appTrendDate = dateState.selectedDate ?? timeline?.date ?? null
+  const appTrendQuery = useAppUsageTrendQuery(appTrendDate, appTrendPeriod, 6, {
+    enabled: page === 'stats' && appTrendDate !== null,
+  })
   const updateConfigMutation = useUpdateAgentConfigMutation()
   const updateAutostartMutation = useUpdateAutostartMutation()
 
@@ -169,6 +176,9 @@ export function AppController() {
               setAppFilter={setAppFilter}
               setDomainFilter={setDomainFilter}
               periodSummary={selectedPeriodSummary ?? null}
+              appTrend={appTrendQuery.data ?? null}
+              appTrendPeriod={appTrendPeriod}
+              setAppTrendPeriod={setAppTrendPeriod}
               calendarDays={calendarQuery.data?.days ?? []}
               calendarMonth={
                 dateState.calendarMonth ?? monthFromDate(resolvedSelectedDate)
@@ -184,7 +194,9 @@ export function AppController() {
               isPeriodRefreshing={
                 selectedPeriodQuery.isFetching && Boolean(selectedPeriodSummary)
               }
+              isAppTrendRefreshing={appTrendQuery.isFetching}
               isCalendarRefreshing={calendarQuery.isFetching}
+              appTrendError={errorToNullableMessage(appTrendQuery.error)}
               onCalendarMonthChange={selectCalendarMonth}
               onSelectDate={selectDate}
             />

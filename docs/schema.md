@@ -41,6 +41,47 @@
 
 `raw_events` 启动后持续 capped 在最近 50,000 行以内，只用于本地调试。
 
+## `daily_app_usage`
+
+按本地日期预聚合应用使用时长，供统计页、月历和应用趋势图快速读取。
+
+- `date`：本地日期，格式为 `YYYY-MM-DD`
+- `process_name`
+- `display_name`
+- `seconds`：该日期内累计应用前台时长
+- `segment_count`：该日期内覆盖到的应用片段数量
+- `updated_at`
+
+主键：`(date, process_name)`。
+
+## `daily_domain_usage`
+
+按本地日期预聚合浏览器域名使用时长。
+
+- `date`
+- `domain`
+- `seconds`
+- `segment_count`
+- `updated_at`
+
+主键：`(date, domain)`。
+
+## `daily_presence_usage`
+
+按本地日期预聚合设备状态时长。
+
+- `date`
+- `state`：`active` / `idle` / `locked`
+- `seconds`
+- `segment_count`
+- `updated_at`
+
+主键：`(date, state)`。
+
+## `rollup_metadata`
+
+记录预聚合数据版本。服务启动时如果发现 `daily_rollup_version` 缺失或过期，会从原始 segment 表重建日汇总。
+
 ## `schema_migrations`
 
 - `version`
@@ -55,3 +96,5 @@
 2. `create_indexes`
 3. `add_last_seen_columns`
 4. `add_performance_indexes`
+5. `add_overlap_lookup_indexes`
+6. `create_daily_rollups`

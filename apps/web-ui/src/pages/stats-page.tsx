@@ -1,5 +1,11 @@
 import { useState } from 'react'
-import type { DaySummary, PeriodSummaryResponse } from '../api'
+import type {
+    AppUsageTrendResponse,
+    DaySummary,
+    PeriodSummaryResponse,
+    TrendPeriod,
+} from '../api'
+import { AppUsageTrendChart } from '../components/app-usage-trend-chart'
 import { CalendarGrid } from '../components/calendar-grid'
 import { CompactDonutChart, DonutChart } from '../components/donut-chart'
 import {
@@ -27,6 +33,9 @@ export function StatsPage(props: {
     setAppFilter: (value: DashboardFilter) => void
     setDomainFilter: (value: DashboardFilter) => void
     periodSummary: PeriodSummaryResponse | null
+    appTrend: AppUsageTrendResponse | null
+    appTrendPeriod: TrendPeriod
+    setAppTrendPeriod: (value: TrendPeriod) => void
     calendarDays: DaySummary[]
     calendarMonth: string
     selectedDate: string
@@ -35,7 +44,9 @@ export function StatsPage(props: {
     weekBars: WeekBarDatum[]
     isTimelineRefreshing: boolean
     isPeriodRefreshing: boolean
+    isAppTrendRefreshing: boolean
     isCalendarRefreshing: boolean
+    appTrendError: string | null
     onCalendarMonthChange: (month: string) => void
     onSelectDate: (date: string) => void
 }) {
@@ -61,6 +72,43 @@ export function StatsPage(props: {
                     lockedSeconds={presenceByKey.get('locked') ?? 0}
                     refreshing={props.isTimelineRefreshing}
                 />
+            </section>
+
+            <section className="stats-trend-section">
+                <div className="panel page-panel stats-trend-card">
+                    <div className="panel-header stats-trend-header">
+                        <div>
+                            <h2>应用趋势</h2>
+                        </div>
+                        <div className="stats-trend-actions">
+                            <RefreshBadge active={props.isAppTrendRefreshing} />
+                            <div className="ui-segmented" aria-label="应用趋势范围">
+                                <button
+                                    type="button"
+                                    className={props.appTrendPeriod === 'week' ? 'is-active' : ''}
+                                    onClick={() => props.setAppTrendPeriod('week')}
+                                >
+                                    周
+                                </button>
+                                <button
+                                    type="button"
+                                    className={props.appTrendPeriod === 'month' ? 'is-active' : ''}
+                                    onClick={() => props.setAppTrendPeriod('month')}
+                                >
+                                    月
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    {props.appTrendError && !props.appTrend ? (
+                        <div className="state-card error-card">{props.appTrendError}</div>
+                    ) : (
+                        <AppUsageTrendChart
+                            trend={props.appTrend}
+                            loading={props.loading || props.isAppTrendRefreshing}
+                        />
+                    )}
+                </div>
             </section>
 
             <section className="stats-analysis-grid">

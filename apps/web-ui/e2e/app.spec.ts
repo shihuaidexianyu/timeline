@@ -8,6 +8,7 @@ test('stats page renders without invalid text', async ({ page }) => {
   await page.goto('/#/stats')
 
   await expect(page.getByRole('heading', { name: '统计概览' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '应用趋势' })).toBeVisible()
   await expect(page.locator('body')).not.toContainText(/NaN|undefined/)
 })
 
@@ -41,6 +42,11 @@ async function mockApi(page: Page) {
 
     if (path === '/api/stats/summary') {
       await route.fulfill({ json: envelope(periodSummary) })
+      return
+    }
+
+    if (path === '/api/stats/apps/trend') {
+      await route.fulfill({ json: envelope(appUsageTrend) })
       return
     }
 
@@ -135,6 +141,36 @@ const periodSummary = {
   today: { focus_seconds: 3600, active_seconds: 3600 },
   week: { focus_seconds: 3600, active_seconds: 3600 },
   month: { focus_seconds: 3600, active_seconds: 3600 },
+}
+
+const appUsageTrend = {
+  period: 'week',
+  start_date: '2026-05-18',
+  end_date: '2026-05-24',
+  timezone: '+08:00',
+  days: [
+    '2026-05-18',
+    '2026-05-19',
+    '2026-05-20',
+    '2026-05-21',
+    '2026-05-22',
+    '2026-05-23',
+    '2026-05-24',
+  ],
+  series: [
+    {
+      key: 'Code.exe',
+      label: 'Visual Studio Code',
+      total_seconds: 3600,
+      daily_seconds: [0, 1800, 1800, 0, 0, 0, 0],
+    },
+    {
+      key: 'msedge.exe',
+      label: 'Microsoft Edge',
+      total_seconds: 1800,
+      daily_seconds: [0, 1800, 0, 0, 0, 0, 0],
+    },
+  ],
 }
 
 const monthCalendar = {

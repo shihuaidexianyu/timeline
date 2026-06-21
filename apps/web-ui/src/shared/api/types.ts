@@ -30,12 +30,29 @@ export type PresenceSegment = {
   ended_at: string | null
 }
 
+export type VisibleWindowSegment = {
+  id: number
+  started_at: string
+  ended_at: string | null
+  app: {
+    process_name: string
+    display_name: string
+    exe_path: string | null
+    window_title: string | null
+    is_browser: boolean
+  }
+  hwnd: number
+  process_id: number
+  visible_area_ratio: number
+}
+
 export type TimelineDayResponse = {
   date: string
   timezone: string
   focus_segments: FocusSegment[]
   browser_segments: BrowserSegment[]
   presence_segments: PresenceSegment[]
+  visible_window_segments?: VisibleWindowSegment[]
 }
 
 export type DurationStat = {

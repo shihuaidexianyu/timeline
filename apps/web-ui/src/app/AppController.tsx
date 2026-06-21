@@ -25,9 +25,9 @@ import {
 import { useTheme } from '../hooks/use-theme'
 import { SettingsPage } from '../pages/settings-page'
 import { StatsPage } from '../pages/stats-page'
-import { TimelinePage } from '../pages/timeline-page'
-import type { TrendPeriod, UsageMetric } from '../shared/api'
-import type { TimelineSegmentKind } from '../features/timeline/timeline-selectors'
+import { UsagePage } from '../pages/usage-page'
+import type { UsageMetric } from '../shared/api'
+import type { AppTrendView } from '../pages/usage-page'
 
 export function AppController() {
   const { theme, setTheme } = useTheme()
@@ -36,14 +36,9 @@ export function AppController() {
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null)
   const [appFilter, setAppFilter] = useState<DashboardFilter>(null)
   const [domainFilter, setDomainFilter] = useState<DashboardFilter>(null)
-  const [timelineActiveOnly, setTimelineActiveOnly] = useState(false)
-  const [timelineSearchQuery, setTimelineSearchQuery] = useState('')
-  const [timelineSegmentKind, setTimelineSegmentKind] =
-    useState<TimelineSegmentKind>('all')
-  const [focusedSegmentId, setFocusedSegmentId] = useState<string | null>(null)
-  const [appTrendPeriod, setAppTrendPeriod] = useState<TrendPeriod>('week')
   const [appUsageMetric, setAppUsageMetric] =
     useState<UsageMetric>('visible_window')
+  const [appTrendView, setAppTrendView] = useState<AppTrendView>('day')
 
   const timelineQuery = useTimelineDayQuery(null)
   const timeline = timelineQuery.data ?? null
@@ -74,15 +69,15 @@ export function AppController() {
   const appTrendDate = dateState.selectedDate ?? timeline?.date ?? null
   const appTrendQuery = useAppUsageTrendQuery(
     appTrendDate,
-    appTrendPeriod,
+    appTrendView === 'day' ? 'week' : appTrendView,
     appUsageMetric,
     6,
     {
-      enabled: page === 'stats' && appTrendDate !== null,
+      enabled: page === 'usage' && appTrendView !== 'day' && appTrendDate !== null,
     },
   )
   const appStatsQuery = useAppStatsQuery(appTrendDate, appUsageMetric, {
-    enabled: page === 'stats' && appTrendDate !== null,
+    enabled: (page === 'stats' || page === 'usage') && appTrendDate !== null,
   })
   const updateConfigMutation = useUpdateAgentConfigMutation()
   const updateAutostartMutation = useUpdateAutostartMutation()
@@ -128,14 +123,6 @@ export function AppController() {
     () => (appStatsQuery.data ?? []).reduce((sum, item) => sum + item.seconds, 0),
     [appStatsQuery.data],
   )
-  const timelineDashboard = useMemo(
-    () =>
-      selectedTimeline
-        ? buildDashboardModel(selectedTimeline, timelineActiveOnly)
-        : null,
-    [selectedTimeline, timelineActiveOnly],
-  )
-
   const resolvedSelectedDate =
     dateState.selectedDate ?? selectedTimeline?.date ?? timeline?.date ?? '--'
   const resolvedTimezone =
@@ -164,13 +151,11 @@ export function AppController() {
     dateState.selectDate(nextDate)
     setAppFilter(null)
     setDomainFilter(null)
-    setFocusedSegmentId(null)
   }
 
   function selectCalendarMonth(nextMonth: string) {
     dateState.selectCalendarMonth(nextMonth)
     setDomainFilter(null)
-    setFocusedSegmentId(null)
   }
 
   return (
@@ -198,11 +183,7 @@ export function AppController() {
               setAppFilter={setAppFilter}
               setDomainFilter={setDomainFilter}
               periodSummary={selectedPeriodSummary ?? null}
-              appTrend={appTrendQuery.data ?? null}
-              appTrendPeriod={appTrendPeriod}
-              setAppTrendPeriod={setAppTrendPeriod}
               appUsageMetric={appUsageMetric}
-              setAppUsageMetric={setAppUsageMetric}
               appStats={appStatSlices}
               appStatsTotalSeconds={appStatTotalSeconds}
               calendarDays={calendarQuery.data?.days ?? []}
@@ -220,36 +201,30 @@ export function AppController() {
               isPeriodRefreshing={
                 selectedPeriodQuery.isFetching && Boolean(selectedPeriodSummary)
               }
-              isAppTrendRefreshing={appTrendQuery.isFetching}
               isAppStatsRefreshing={appStatsQuery.isFetching}
               isCalendarRefreshing={calendarQuery.isFetching}
-              appTrendError={errorToNullableMessage(appTrendQuery.error)}
               appStatsError={errorToNullableMessage(appStatsQuery.error)}
               onCalendarMonthChange={selectCalendarMonth}
               onSelectDate={selectDate}
             />
           ) : null}
 
-          {page === 'timeline' ? (
-            <TimelinePage
-              dashboard={timelineDashboard}
-              loading={!timelineDashboard}
-              appFilter={appFilter}
+          {page === 'usage' ? (
+            <UsagePage
+              dashboard={dashboard}
+              loading={!hasDashboard}
               selectedDate={resolvedSelectedDate}
-              activeOnly={timelineActiveOnly}
-              searchQuery={timelineSearchQuery}
-              segmentKind={timelineSegmentKind}
-              focusedSegmentId={focusedSegmentId}
-              viewStartHour={dateState.viewport.viewStartHour}
-              viewStartSec={dateState.viewport.viewStartSec}
-              viewEndSec={dateState.viewport.viewEndSec}
-              zoomHours={dateState.viewport.zoomHours}
-              setActiveOnly={setTimelineActiveOnly}
-              setSearchQuery={setTimelineSearchQuery}
-              setSegmentKind={setTimelineSegmentKind}
-              setFocusedSegmentId={setFocusedSegmentId}
-              setZoomHours={dateState.setZoomHours}
-              setViewStartHour={dateState.setViewStartHour}
+              appUsageMetric={appUsageMetric}
+              setAppUsageMetric={setAppUsageMetric}
+              appTrendView={appTrendView}
+              setAppTrendView={setAppTrendView}
+              appTrend={appTrendQuery.data ?? null}
+              appTrendError={errorToNullableMessage(appTrendQuery.error)}
+              isTimelineRefreshing={
+                (timelineQuery.isFetching || selectedTimelineQuery.isFetching) &&
+                hasDashboard
+              }
+              isAppTrendRefreshing={appTrendQuery.isFetching}
             />
           ) : null}
 

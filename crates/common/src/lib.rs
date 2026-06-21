@@ -88,12 +88,27 @@ pub struct PresenceSegment {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VisibleWindowSegment {
+    pub id: i64,
+    #[serde(with = "time::serde::rfc3339")]
+    pub started_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub ended_at: Option<OffsetDateTime>,
+    pub app: AppInfo,
+    pub hwnd: i64,
+    pub process_id: i64,
+    pub visible_area_ratio: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TimelineDayResponse {
     pub date: String,
     pub timezone: String,
     pub focus_segments: Vec<FocusSegment>,
     pub browser_segments: Vec<BrowserSegment>,
     pub presence_segments: Vec<PresenceSegment>,
+    #[serde(default)]
+    pub visible_window_segments: Vec<VisibleWindowSegment>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

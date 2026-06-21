@@ -3,16 +3,18 @@
 use anyhow::{Context, Result};
 use common::PresenceState;
 use serde::Serialize;
-use std::ffi::OsString;
-use std::os::windows::ffi::OsStringExt;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, RECT};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
-use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
-use windows::Win32::System::StationsAndDesktops::{
-    CloseDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_READOBJECTS, GetUserObjectInformationW, HDESK,
-    OpenInputDesktop, UOI_NAME,
+use windows::Win32::Graphics::Gdi::{EnumDisplayMonitors, HDC, HMONITOR};
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+};
+use windows::Win32::System::RemoteDesktop::{
+    ProcessIdToSessionId, WTS_SESSIONSTATE_LOCK, WTS_SESSIONSTATE_UNLOCK, WTSFreeMemory,
+    WTSINFOEXW, WTSQuerySessionInformationW, WTSSessionInfoEx,
 };
 use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::System::Threading::{
@@ -21,13 +23,56 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GWL_EXSTYLE, GetForegroundWindow, GetSystemMetrics, GetWindowLongPtrW,
-    GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
-    IsWindowVisible, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
-    WS_EX_TOOLWINDOW,
+    GetWindowRect, GetWindowThreadProcessId, IsIconic, IsWindowVisible, SM_CXVIRTUALSCREEN,
+    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SMTO_ABORTIFHUNG,
+    SendMessageTimeoutW, WM_GETTEXT, WM_GETTEXTLENGTH, WS_EX_TOOLWINDOW,
 };
 use windows::core::{BOOL, PWSTR};
 
 pub const VISIBLE_WINDOW_MIN_RATIO: f64 = 0.05;
+pub const VISIBLE_WINDOW_MIN_SCREEN_RATIO: f64 = 0.25;
+const WINDOW_TEXT_TIMEOUT_MS: u32 = 100;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProcessInfo {
+    process_name: String,
+    exe_path: Option<String>,
+}
+
+struct ProcessInfoCache {
+    names_by_pid: BTreeMap<u32, String>,
+    cache_by_pid: BTreeMap<u32, ProcessInfo>,
+}
+
+impl ProcessInfoCache {
+    fn new(names_by_pid: BTreeMap<u32, String>) -> Self {
+        Self {
+            names_by_pid,
+            cache_by_pid: BTreeMap::new(),
+        }
+    }
+
+    fn resolve<F>(&mut self, process_id: u32, mut read_path: F) -> Option<ProcessInfo>
+    where
+        F: FnMut(u32) -> Result<String>,
+    {
+        if let Some(info) = self.cache_by_pid.get(&process_id) {
+            return Some(info.clone());
+        }
+
+        let exe_path = read_path(process_id).ok();
+        let process_name = exe_path
+            .as_deref()
+            .and_then(process_name_from_path)
+            .or_else(|| self.names_by_pid.get(&process_id).cloned())?;
+        let info = ProcessInfo {
+            process_name,
+            exe_path,
+        };
+        self.cache_by_pid.insert(process_id, info.clone());
+        Some(info)
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ForegroundWindowSnapshot {
@@ -35,7 +80,7 @@ pub struct ForegroundWindowSnapshot {
     pub process_id: u32,
     pub session_id: u32,
     pub process_name: String,
-    pub exe_path: String,
+    pub exe_path: Option<String>,
     pub window_title: Option<String>,
     pub is_browser: bool,
 }
@@ -46,7 +91,7 @@ pub struct VisibleWindowSnapshot {
     pub process_id: u32,
     pub session_id: u32,
     pub process_name: String,
-    pub exe_path: String,
+    pub exe_path: Option<String>,
     pub window_title: Option<String>,
     pub visible_area_ratio: f64,
 }
@@ -128,12 +173,7 @@ pub fn capture_foreground_window(
         return Ok(None);
     }
 
-    let exe_path = read_process_path(process_id)?;
-    let process_name = Path::new(&exe_path)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("unknown.exe")
-        .to_string();
+    let process_info = read_process_info(process_id);
     let session_id = read_session_id(process_id)?;
     let window_title = if include_window_title {
         read_window_title(hwnd)
@@ -145,10 +185,10 @@ pub fn capture_foreground_window(
         hwnd: hwnd.0 as isize,
         process_id,
         session_id,
-        process_name: process_name.clone(),
-        exe_path,
+        process_name: process_info.process_name.clone(),
+        exe_path: process_info.exe_path,
         window_title,
-        is_browser: is_browser_process(&process_name),
+        is_browser: is_browser_process(&process_info.process_name),
     }))
 }
 
@@ -158,6 +198,9 @@ pub fn capture_visible_windows(include_window_title: bool) -> Result<Vec<Visible
     }
 
     let virtual_screen = virtual_screen_rect();
+    let monitor_rects = monitor_rects();
+    let process_names = read_process_names_by_pid().unwrap_or_default();
+    let mut process_cache = ProcessInfoCache::new(process_names);
     let mut covered_rects = Vec::new();
     let mut snapshots = Vec::new();
 
@@ -185,6 +228,9 @@ pub fn capture_visible_windows(include_window_title: bool) -> Result<Vec<Visible
         if visible_area_ratio <= VISIBLE_WINDOW_MIN_RATIO {
             continue;
         }
+        if !is_large_enough_visible_window(clipped_rect, visible_area, &monitor_rects) {
+            continue;
+        }
 
         let mut process_id = 0u32;
         unsafe {
@@ -194,14 +240,9 @@ pub fn capture_visible_windows(include_window_title: bool) -> Result<Vec<Visible
             continue;
         }
 
-        let Ok(exe_path) = read_process_path(process_id) else {
+        let Some(process_info) = process_cache.resolve(process_id, read_process_path) else {
             continue;
         };
-        let process_name = Path::new(&exe_path)
-            .file_name()
-            .and_then(|value| value.to_str())
-            .unwrap_or("unknown.exe")
-            .to_string();
         let session_id = read_session_id(process_id).unwrap_or_default();
         let window_title = if include_window_title {
             read_window_title(hwnd)
@@ -213,8 +254,8 @@ pub fn capture_visible_windows(include_window_title: bool) -> Result<Vec<Visible
             hwnd: hwnd.0 as isize,
             process_id,
             session_id,
-            process_name,
-            exe_path,
+            process_name: process_info.process_name,
+            exe_path: process_info.exe_path,
             window_title,
             visible_area_ratio,
         });
@@ -317,6 +358,75 @@ fn virtual_screen_rect() -> ScreenRect {
     })
 }
 
+fn monitor_rects() -> Vec<ScreenRect> {
+    unsafe extern "system" fn collect_monitor(
+        _monitor: HMONITOR,
+        _hdc: HDC,
+        rect: *mut RECT,
+        lparam: LPARAM,
+    ) -> BOOL {
+        if rect.is_null() {
+            return true.into();
+        }
+
+        let monitors = unsafe { &mut *(lparam.0 as *mut Vec<ScreenRect>) };
+        if let Some(monitor_rect) = ScreenRect::from_rect(unsafe { *rect }) {
+            monitors.push(monitor_rect);
+        }
+        true.into()
+    }
+
+    let mut monitors = Vec::new();
+    let ok = unsafe {
+        EnumDisplayMonitors(
+            None,
+            None,
+            Some(collect_monitor),
+            LPARAM((&mut monitors as *mut Vec<ScreenRect>) as isize),
+        )
+    };
+
+    if ok.as_bool() && !monitors.is_empty() {
+        monitors
+    } else {
+        vec![virtual_screen_rect()]
+    }
+}
+
+fn is_large_enough_visible_window(
+    clipped_rect: ScreenRect,
+    visible_area: i64,
+    monitor_rects: &[ScreenRect],
+) -> bool {
+    if visible_area <= 0 {
+        return false;
+    }
+
+    let Some(monitor_rect) = dominant_monitor_for_window(clipped_rect, monitor_rects) else {
+        return false;
+    };
+    let monitor_area = monitor_rect.area();
+    if monitor_area <= 0 {
+        return false;
+    }
+
+    visible_area as f64 / monitor_area as f64 >= VISIBLE_WINDOW_MIN_SCREEN_RATIO
+}
+
+fn dominant_monitor_for_window(
+    clipped_rect: ScreenRect,
+    monitor_rects: &[ScreenRect],
+) -> Option<ScreenRect> {
+    monitor_rects
+        .iter()
+        .filter_map(|monitor_rect| {
+            let overlap_area = clipped_rect.intersect(*monitor_rect)?.area();
+            Some((*monitor_rect, overlap_area))
+        })
+        .max_by_key(|(_, overlap_area)| *overlap_area)
+        .map(|(monitor_rect, _)| monitor_rect)
+}
+
 fn visible_area_after_occlusion(rect: ScreenRect, covered_rects: &[ScreenRect]) -> i64 {
     let mut visible_parts = vec![rect];
 
@@ -382,20 +492,99 @@ fn read_idle_duration() -> Result<Duration> {
 }
 
 fn read_window_title(hwnd: HWND) -> Option<String> {
-    let length = unsafe { GetWindowTextLengthW(hwnd) };
-    if length <= 0 {
+    let mut length_result = 0usize;
+    let length_status = unsafe {
+        SendMessageTimeoutW(
+            hwnd,
+            WM_GETTEXTLENGTH,
+            WPARAM(0),
+            LPARAM(0),
+            SMTO_ABORTIFHUNG,
+            WINDOW_TEXT_TIMEOUT_MS,
+            Some(&mut length_result),
+        )
+    };
+    if length_status.0 == 0 || length_result == 0 {
         return None;
     }
 
-    let mut buffer = vec![0u16; length as usize + 1];
-    let written = unsafe { GetWindowTextW(hwnd, &mut buffer) };
-    if written <= 0 {
+    let mut buffer = vec![0u16; length_result.saturating_add(1)];
+    let mut written_result = 0usize;
+    let text_status = unsafe {
+        SendMessageTimeoutW(
+            hwnd,
+            WM_GETTEXT,
+            WPARAM(buffer.len()),
+            LPARAM(buffer.as_mut_ptr() as isize),
+            SMTO_ABORTIFHUNG,
+            WINDOW_TEXT_TIMEOUT_MS,
+            Some(&mut written_result),
+        )
+    };
+    if text_status.0 == 0 || written_result == 0 {
         return None;
     }
 
-    let value = OsString::from_wide(&buffer[..written as usize]);
-    let title = value.to_string_lossy().trim().to_string();
+    let written = written_result.min(buffer.len().saturating_sub(1));
+    let title = String::from_utf16_lossy(&buffer[..written])
+        .trim()
+        .to_string();
     if title.is_empty() { None } else { Some(title) }
+}
+
+fn read_process_info(process_id: u32) -> ProcessInfo {
+    let exe_path = read_process_path(process_id).ok();
+    let process_name = exe_path
+        .as_deref()
+        .and_then(process_name_from_path)
+        .or_else(|| {
+            read_process_names_by_pid()
+                .ok()
+                .and_then(|names| names.get(&process_id).cloned())
+        })
+        .unwrap_or_else(|| "unknown.exe".to_string());
+
+    ProcessInfo {
+        process_name,
+        exe_path,
+    }
+}
+
+fn read_process_names_by_pid() -> Result<BTreeMap<u32, String>> {
+    let snapshot = unsafe {
+        CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+            .context("CreateToolhelp32Snapshot failed")?
+    };
+    let _guard = HandleGuard(snapshot);
+
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..PROCESSENTRY32W::default()
+    };
+    unsafe {
+        Process32FirstW(snapshot, &mut entry).context("Process32FirstW failed")?;
+    }
+
+    let mut process_names = BTreeMap::new();
+    loop {
+        let end = entry
+            .szExeFile
+            .iter()
+            .position(|value| *value == 0)
+            .unwrap_or(entry.szExeFile.len());
+        let name = String::from_utf16_lossy(&entry.szExeFile[..end])
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            process_names.insert(entry.th32ProcessID, name);
+        }
+
+        if unsafe { Process32NextW(snapshot, &mut entry) }.is_err() {
+            break;
+        }
+    }
+
+    Ok(process_names)
 }
 
 fn read_process_path(process_id: u32) -> Result<String> {
@@ -420,6 +609,15 @@ fn read_process_path(process_id: u32) -> Result<String> {
     Ok(String::from_utf16_lossy(&buffer[..length as usize]))
 }
 
+fn process_name_from_path(exe_path: &str) -> Option<String> {
+    Path::new(exe_path)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
 fn read_session_id(process_id: u32) -> Result<u32> {
     let mut session_id = 0u32;
     unsafe {
@@ -430,42 +628,42 @@ fn read_session_id(process_id: u32) -> Result<u32> {
     Ok(session_id)
 }
 
-/// Detects whether the Windows workstation is locked by checking the name of
-/// the active input desktop. When the machine is locked, Windows switches to the
-/// "Winlogon" desktop; the normal interactive desktop is named "Default".
+/// Detects whether the current Windows session is locked from Terminal Services
+/// session metadata. This avoids querying the input desktop, which can block in
+/// GUI agent processes on some machines.
 fn is_workstation_locked() -> Result<bool> {
-    let desktop = unsafe {
-        OpenInputDesktop(DESKTOP_CONTROL_FLAGS(0), false, DESKTOP_READOBJECTS)
-            .context("OpenInputDesktop failed")?
-    };
-    let _guard = DesktopGuard(desktop);
-
-    let mut needed = 0u32;
+    let session_id = read_session_id(std::process::id())?;
+    let mut buffer = PWSTR::null();
+    let mut bytes_returned = 0u32;
     unsafe {
-        let _ = GetUserObjectInformationW(HANDLE(desktop.0), UOI_NAME, None, 0, Some(&mut needed));
+        WTSQuerySessionInformationW(
+            None,
+            session_id,
+            WTSSessionInfoEx,
+            &mut buffer,
+            &mut bytes_returned,
+        )
+        .context("WTSQuerySessionInformationW failed")?;
     }
+    let _guard = WtsMemoryGuard(buffer);
 
-    if needed == 0 {
+    if buffer.is_null() || bytes_returned < std::mem::size_of::<WTSINFOEXW>() as u32 {
         return Ok(false);
     }
 
-    let mut buffer = vec![0u16; needed as usize / 2];
-    unsafe {
-        GetUserObjectInformationW(
-            HANDLE(desktop.0),
-            UOI_NAME,
-            Some(buffer.as_mut_ptr().cast()),
-            needed,
-            Some(&mut needed),
-        )
-        .context("GetUserObjectInformationW failed")?;
+    let info = unsafe { &*(buffer.0.cast::<WTSINFOEXW>()) };
+    let session_flags = unsafe { info.Data.WTSInfoExLevel1.SessionFlags };
+    Ok(session_lock_state(session_flags).unwrap_or(false))
+}
+
+fn session_lock_state(session_flags: i32) -> Option<bool> {
+    if session_flags == WTS_SESSIONSTATE_LOCK as i32 {
+        return Some(true);
     }
-
-    let name = String::from_utf16_lossy(&buffer)
-        .trim_end_matches('\0')
-        .to_string();
-
-    Ok(!name.eq_ignore_ascii_case("Default"))
+    if session_flags == WTS_SESSIONSTATE_UNLOCK as i32 {
+        return Some(false);
+    }
+    None
 }
 
 fn is_browser_process(process_name: &str) -> bool {
@@ -477,7 +675,11 @@ fn is_browser_process(process_name: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScreenRect, visible_area_after_occlusion};
+    use super::{
+        ProcessInfoCache, ScreenRect, is_large_enough_visible_window, session_lock_state,
+        visible_area_after_occlusion,
+    };
+    use std::collections::BTreeMap;
 
     fn rect(left: i32, top: i32, right: i32, bottom: i32) -> ScreenRect {
         ScreenRect::new(left, top, right, bottom).expect("valid rect")
@@ -518,12 +720,89 @@ mod tests {
             2_500
         );
     }
+
+    #[test]
+    fn visible_window_filter_rejects_small_fully_visible_windows() {
+        let screen = rect(0, 0, 100, 100);
+        let window = rect(0, 0, 40, 40);
+
+        assert!(!is_large_enough_visible_window(window, 1_600, &[screen]));
+    }
+
+    #[test]
+    fn visible_window_filter_accepts_half_screen_windows() {
+        let screen = rect(0, 0, 100, 100);
+        let window = rect(0, 0, 50, 100);
+
+        assert!(is_large_enough_visible_window(window, 5_000, &[screen]));
+    }
+
+    #[test]
+    fn visible_window_filter_uses_containing_monitor_not_virtual_desktop() {
+        let left_monitor = rect(0, 0, 100, 100);
+        let right_monitor = rect(100, 0, 200, 100);
+        let window = rect(100, 0, 150, 100);
+
+        assert!(is_large_enough_visible_window(
+            window,
+            5_000,
+            &[left_monitor, right_monitor]
+        ));
+    }
+
+    #[test]
+    fn session_lock_state_maps_known_wts_flags() {
+        assert_eq!(session_lock_state(0), Some(true));
+        assert_eq!(session_lock_state(1), Some(false));
+        assert_eq!(session_lock_state(-1), None);
+    }
+
+    #[test]
+    fn process_info_cache_keeps_exe_path_and_reads_each_pid_once() {
+        let mut names = BTreeMap::new();
+        names.insert(42, "code.exe".to_string());
+        let mut cache = ProcessInfoCache::new(names);
+        let mut path_reads = 0;
+
+        let first = cache
+            .resolve(42, |_| {
+                path_reads += 1;
+                Ok(r"C:\Apps\code.exe".to_string())
+            })
+            .expect("first lookup");
+        let second = cache
+            .resolve(42, |_| {
+                path_reads += 1;
+                Ok(r"C:\Apps\code.exe".to_string())
+            })
+            .expect("second lookup");
+
+        assert_eq!(path_reads, 1);
+        assert_eq!(first.process_name, "code.exe");
+        assert_eq!(first.exe_path.as_deref(), Some(r"C:\Apps\code.exe"));
+        assert_eq!(second.exe_path.as_deref(), Some(r"C:\Apps\code.exe"));
+    }
+
+    #[test]
+    fn process_info_cache_derives_name_from_path_when_snapshot_name_is_missing() {
+        let mut cache = ProcessInfoCache::new(BTreeMap::new());
+
+        let info = cache
+            .resolve(7, |_| Ok(r"C:\Program Files\App\weixin.exe".to_string()))
+            .expect("lookup from path");
+
+        assert_eq!(info.process_name, "weixin.exe");
+        assert_eq!(
+            info.exe_path.as_deref(),
+            Some(r"C:\Program Files\App\weixin.exe")
+        );
+    }
 }
 
 /// RAII wrapper that closes a Win32 HANDLE on drop.
 /// Close errors are intentionally ignored — the handle may already be invalid,
 /// and there's no meaningful recovery action during cleanup.
-struct HandleGuard(windows::Win32::Foundation::HANDLE);
+struct HandleGuard(HANDLE);
 
 impl Drop for HandleGuard {
     fn drop(&mut self) {
@@ -533,13 +812,15 @@ impl Drop for HandleGuard {
     }
 }
 
-/// RAII wrapper that closes a Win32 desktop handle on drop (same rationale as HandleGuard).
-struct DesktopGuard(HDESK);
+/// RAII wrapper that frees WTS memory on drop (same rationale as HandleGuard).
+struct WtsMemoryGuard(PWSTR);
 
-impl Drop for DesktopGuard {
+impl Drop for WtsMemoryGuard {
     fn drop(&mut self) {
-        unsafe {
-            let _ = CloseDesktop(self.0);
+        if !self.0.is_null() {
+            unsafe {
+                WTSFreeMemory(self.0.0.cast());
+            }
         }
     }
 }

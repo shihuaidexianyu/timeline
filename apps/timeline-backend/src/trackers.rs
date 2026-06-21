@@ -48,7 +48,11 @@ async fn run_focus_tracker(state: AgentState) -> Result<()> {
 
         match capture_foreground_window(runtime_config.record_window_titles) {
             Ok(snapshot) => {
-                sync_focus_snapshot(&state, snapshot, observed_at, &runtime_config).await?
+                if let Err(error) =
+                    sync_focus_snapshot(&state, snapshot, observed_at, &runtime_config).await
+                {
+                    warn!(?error, "failed to sync focus snapshot");
+                }
             }
             Err(error) => warn!(?error, "failed to read foreground window"),
         }
@@ -63,9 +67,16 @@ async fn run_visible_window_tracker(state: AgentState) -> Result<()> {
         let observed_at = OffsetDateTime::now_utc();
         state.mark_visible_windows_online(observed_at).await;
 
-        match capture_visible_windows(runtime_config.record_window_titles) {
+        // Visible-window stats are app-level. Reading titles for every visible
+        // top-level window can block on a non-responsive window, so leave titles
+        // to the focus tracker where only the foreground window is queried.
+        match capture_visible_windows(false) {
             Ok(snapshots) => {
-                sync_visible_windows(&state, snapshots, observed_at, &runtime_config).await?
+                if let Err(error) =
+                    sync_visible_windows(&state, snapshots, observed_at, &runtime_config).await
+                {
+                    warn!(?error, "failed to sync visible windows");
+                }
             }
             Err(error) => warn!(?error, "failed to read visible windows"),
         }
@@ -89,8 +100,14 @@ async fn run_presence_tracker(state: AgentState) -> Result<()> {
                 }
             };
 
-        sync_presence_state(&state, presence.clone(), observed_at).await?;
-        maybe_emit_health_reminder(&state, &runtime_config, &presence, observed_at).await?;
+        if let Err(error) = sync_presence_state(&state, presence.clone(), observed_at).await {
+            warn!(?error, "failed to sync presence state");
+        }
+        if let Err(error) =
+            maybe_emit_health_reminder(&state, &runtime_config, &presence, observed_at).await
+        {
+            warn!(?error, "failed to emit health reminder");
+        }
         sleep(Duration::from_millis(runtime_config.poll_interval_millis)).await;
     }
 }
@@ -178,7 +195,7 @@ async fn sync_focus_snapshot(
         let app = AppInfo {
             process_name: snapshot.process_name.clone(),
             display_name: display_name.clone(),
-            exe_path: Some(snapshot.exe_path.clone()),
+            exe_path: snapshot.exe_path.clone(),
             window_title: if runtime_config.record_window_titles {
                 snapshot.window_title.clone()
             } else {
@@ -271,7 +288,7 @@ async fn sync_visible_windows(
         let window = crate::db::VisibleWindowSegmentInput {
             process_name: snapshot.process_name.clone(),
             display_name: display_name.clone(),
-            exe_path: Some(snapshot.exe_path.clone()),
+            exe_path: snapshot.exe_path.clone(),
             window_title: if runtime_config.record_window_titles {
                 snapshot.window_title.clone()
             } else {
@@ -655,7 +672,7 @@ mod tests {
             process_id: 200,
             session_id: 1,
             process_name: process_name.to_string(),
-            exe_path: format!(r"C:\Apps\{process_name}"),
+            exe_path: Some(format!(r"C:\Apps\{process_name}")),
             window_title: Some("Window".to_string()),
             visible_area_ratio: ratio,
         }

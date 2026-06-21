@@ -6,7 +6,7 @@ use common::{
     AppInfo, AppUsageTrendResponse, AppUsageTrendSeries, BrowserEventPayload, BrowserSegment,
     DaySummary, DebugEvent, DurationStat, FocusSegment, FocusStats, KeyedDurationEntry,
     MonthCalendarResponse, PeriodStat, PeriodSummaryResponse, PresenceSegment, PresenceState,
-    TimelineDayResponse, TrendPeriod, UsageMetric,
+    TimelineDayResponse, TrendPeriod, UsageMetric, VisibleWindowSegment,
 };
 use serde::Serialize;
 use sqlx::{Row, Sqlite, SqlitePool, Transaction, sqlite::SqliteConnectOptions};
@@ -230,7 +230,7 @@ CREATE INDEX IF NOT EXISTS idx_daily_visible_app_usage_date_seconds ON daily_vis
 
 /// Keep recent raw events for local debugging while capping unbounded DB growth.
 const RAW_EVENTS_MAX_ROWS: i64 = 50_000;
-const DAILY_ROLLUP_VERSION: &str = "1";
+const DAILY_ROLLUP_VERSION: &str = "2";
 
 impl AgentStore {
     pub async fn connect(config: &AppConfig, timezone: UtcOffset) -> Result<Self> {
@@ -244,7 +244,8 @@ impl AgentStore {
         )?
         .create_if_missing(true)
         .pragma("journal_mode", "WAL")
-        .pragma("synchronous", "NORMAL");
+        .pragma("synchronous", "NORMAL")
+        .pragma("busy_timeout", "5000");
 
         let pool = SqlitePool::connect_with(connect_options)
             .await
@@ -897,6 +898,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 
     pub async fn rebuild_daily_rollups(&self) -> Result<()> {
         let mut app_buckets: BTreeMap<(String, String), RollupBucket> = BTreeMap::new();
+        let mut visible_app_buckets: BTreeMap<(String, String), RollupBucket> = BTreeMap::new();
         let mut domain_buckets: BTreeMap<(String, String), RollupBucket> = BTreeMap::new();
         let mut presence_buckets: BTreeMap<(String, String), RollupBucket> = BTreeMap::new();
 
@@ -919,6 +921,34 @@ FROM focus_segments
                 .unwrap_or(started_at);
             add_rollup_chunks(
                 &mut app_buckets,
+                &process_name,
+                &display_name,
+                started_at,
+                ended_at,
+                self.timezone,
+                true,
+            )?;
+        }
+
+        let visible_rows = sqlx::query(
+            r#"
+SELECT process_name, display_name, started_at, ended_at, last_seen_at
+FROM visible_window_segments
+"#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        for row in visible_rows {
+            let process_name = row.get::<String, _>("process_name");
+            let display_name = row.get::<String, _>("display_name");
+            let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
+            let ended_at = parse_optional_time(row.get::<Option<String>, _>("ended_at"))?
+                .or(parse_optional_time(
+                    row.get::<Option<String>, _>("last_seen_at"),
+                )?)
+                .unwrap_or(started_at);
+            add_rollup_chunks(
+                &mut visible_app_buckets,
                 &process_name,
                 &display_name,
                 started_at,
@@ -992,9 +1022,24 @@ FROM presence_segments
         sqlx::query("DELETE FROM daily_presence_usage")
             .execute(&mut *tx)
             .await?;
+        sqlx::query("DELETE FROM daily_visible_app_usage")
+            .execute(&mut *tx)
+            .await?;
 
         for ((date, key), bucket) in app_buckets {
             upsert_daily_app_usage_tx(
+                &mut tx,
+                &date,
+                &key,
+                &bucket.label,
+                bucket.seconds,
+                bucket.segment_count,
+            )
+            .await?;
+        }
+
+        for ((date, key), bucket) in visible_app_buckets {
+            upsert_daily_visible_app_usage_tx(
                 &mut tx,
                 &date,
                 &key,
@@ -1257,6 +1302,31 @@ ORDER BY started_at ASC
         .fetch_all(&self.pool)
         .await?;
 
+        let visible_rows = sqlx::query(
+            r#"
+SELECT *
+FROM (
+    SELECT id, process_name, display_name, exe_path, window_title, hwnd, process_id, visible_area_ratio, started_at, ended_at
+    FROM visible_window_segments INDEXED BY idx_visible_window_segments_ended_started
+    WHERE ended_at > ? AND started_at < ?
+
+    UNION ALL
+
+    SELECT id, process_name, display_name, exe_path, window_title, hwnd, process_id, visible_area_ratio, started_at, ended_at
+    FROM visible_window_segments
+    WHERE ended_at IS NULL AND started_at < ? AND ? > ?
+)
+ORDER BY started_at ASC
+"#,
+        )
+        .bind(&day_start_text)
+        .bind(&day_end_text)
+        .bind(&day_end_text)
+        .bind(&now_text)
+        .bind(&day_start_text)
+        .fetch_all(&self.pool)
+        .await?;
+
         let mut focus_segments = Vec::new();
         for row in focus_rows {
             let (started_at, ended_at) =
@@ -1305,12 +1375,36 @@ ORDER BY started_at ASC
             });
         }
 
+        let mut visible_window_segments = Vec::new();
+        for row in visible_rows {
+            let (started_at, ended_at) =
+                parse_segment_bounds(&row, now_utc, day_start_utc, day_end_utc)?;
+            let process_name = row.get::<String, _>("process_name");
+
+            visible_window_segments.push(VisibleWindowSegment {
+                id: row.get("id"),
+                started_at,
+                ended_at: Some(ended_at),
+                app: AppInfo {
+                    is_browser: is_browser_process(&process_name),
+                    process_name,
+                    display_name: row.get("display_name"),
+                    exe_path: row.get("exe_path"),
+                    window_title: row.get("window_title"),
+                },
+                hwnd: row.get("hwnd"),
+                process_id: row.get("process_id"),
+                visible_area_ratio: row.get("visible_area_ratio"),
+            });
+        }
+
         Ok(TimelineDayResponse {
             date: date.to_string(),
             timezone: timezone.to_string(),
             focus_segments,
             browser_segments,
             presence_segments,
+            visible_window_segments,
         })
     }
 
@@ -2160,6 +2254,13 @@ fn parse_presence_state(value: &str) -> Result<PresenceState> {
     }
 }
 
+fn is_browser_process(process_name: &str) -> bool {
+    matches!(
+        process_name.to_ascii_lowercase().as_str(),
+        "chrome.exe" | "msedge.exe" | "firefox.exe" | "brave.exe"
+    )
+}
+
 fn presence_label(value: &PresenceState) -> &'static str {
     match value {
         PresenceState::Active => "active",
@@ -2229,19 +2330,18 @@ fn days_in_month(year: i32, month: time::Month) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentStore, AppConfig, VisibleWindowSegmentInput, parse_time};
+    use super::{AgentStore, AppConfig, VisibleWindowSegmentInput, format_time, parse_time};
     use common::{AppInfo, BrowserEventPayload, PresenceState, UsageMetric};
     use sqlx::Row;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use time::{Duration, OffsetDateTime};
+
+    static TEST_DB_COUNTER: AtomicU64 = AtomicU64::new(0);
 
     #[tokio::test]
     async fn restore_unclosed_segments_uses_last_seen_at_instead_of_restart_time() {
-        let unique = format!(
-            "timeline-test-{}.sqlite",
-            OffsetDateTime::now_utc().unix_timestamp_nanos()
-        );
-        let database_path = std::env::temp_dir().join(unique);
+        let database_path = unique_database_path();
         let config = AppConfig {
             database_path: database_path.clone(),
             lockfile_path: temp_lock_path(&database_path),
@@ -2481,6 +2581,57 @@ VALUES ('legacy.exe', 'Legacy App', NULL, NULL, 0, ?, ?, ?, ?)
     }
 
     #[tokio::test]
+    async fn rebuild_daily_rollups_backfills_visible_window_segments() {
+        let (store, database_path) = temp_store().await;
+        let start = parse_time("2026-06-17T03:00:00Z").expect("start");
+        let end = parse_time("2026-06-17T03:20:00Z").expect("end");
+        let code = visible_input("code.exe", "Code", 100, 10, 0.50);
+
+        store
+            .start_visible_window_segment(&code, start)
+            .await
+            .expect("start visible segment");
+
+        sqlx::query("DELETE FROM daily_visible_app_usage")
+            .execute(&store.pool)
+            .await
+            .expect("clear visible rollup");
+
+        sqlx::query(
+            "UPDATE visible_window_segments SET ended_at = ?, last_seen_at = ? WHERE process_name = ?",
+        )
+        .bind(format_time(end).expect("format end"))
+        .bind(format_time(end).expect("format last seen"))
+        .bind("code.exe")
+        .execute(&store.pool)
+        .await
+        .expect("close visible segment without rollup");
+
+        store
+            .rebuild_daily_rollups()
+            .await
+            .expect("rebuild rollups");
+
+        let anchor =
+            time::Date::from_calendar_date(2026, time::Month::June, 17).expect("anchor date");
+        let trend = store
+            .read_app_usage_trend(
+                anchor,
+                common::TrendPeriod::Week,
+                6,
+                UsageMetric::VisibleWindow,
+            )
+            .await
+            .expect("read visible trend");
+
+        assert_eq!(trend.series.len(), 1);
+        assert_eq!(trend.series[0].key, "code.exe");
+        assert_eq!(trend.series[0].total_seconds, 20 * 60);
+
+        let _ = std::fs::remove_file(database_path);
+    }
+
+    #[tokio::test]
     async fn visible_window_rollups_count_parallel_windows_and_stay_separate_from_focus() {
         let (store, database_path) = temp_store().await;
         let start = parse_time("2026-06-16T23:30:00Z").expect("start");
@@ -2546,6 +2697,41 @@ VALUES ('legacy.exe', 'Legacy App', NULL, NULL, 0, ?, ?, ?, ?)
     }
 
     #[tokio::test]
+    async fn day_timeline_includes_visible_window_segments() {
+        let (store, database_path) = temp_store().await;
+        let start = parse_time("2026-06-17T02:00:00Z").expect("start");
+        let end = parse_time("2026-06-17T02:05:00Z").expect("end");
+        let code = visible_input("code.exe", "Code", 100, 10, 0.50);
+
+        let id = store
+            .start_visible_window_segment(&code, start)
+            .await
+            .expect("start visible");
+        store
+            .end_visible_window_segment(id, end)
+            .await
+            .expect("end visible");
+
+        let timeline = store
+            .read_day_timeline(
+                time::Date::from_calendar_date(2026, time::Month::June, 17).expect("date"),
+                time::UtcOffset::UTC,
+            )
+            .await
+            .expect("read day timeline");
+
+        assert_eq!(timeline.visible_window_segments.len(), 1);
+        let visible = &timeline.visible_window_segments[0];
+        assert_eq!(visible.id, id);
+        assert_eq!(visible.app.process_name, "code.exe");
+        assert_eq!(visible.hwnd, 100);
+        assert_eq!(visible.process_id, 10);
+        assert_eq!(visible.visible_area_ratio, 0.50);
+
+        let _ = std::fs::remove_file(database_path);
+    }
+
+    #[tokio::test]
     async fn restore_unclosed_visible_windows_uses_last_seen_at() {
         let (store, database_path) = temp_store().await;
         let start = parse_time("2026-06-17T01:00:00Z").expect("start");
@@ -2605,11 +2791,7 @@ VALUES ('legacy.exe', 'Legacy App', NULL, NULL, 0, ?, ?, ?, ?)
     }
 
     async fn temp_store() -> (AgentStore, PathBuf) {
-        let unique = format!(
-            "timeline-test-{}.sqlite",
-            OffsetDateTime::now_utc().unix_timestamp_nanos()
-        );
-        let database_path = std::env::temp_dir().join(unique);
+        let database_path = unique_database_path();
         let config = AppConfig {
             database_path: database_path.clone(),
             lockfile_path: temp_lock_path(&database_path),
@@ -2622,6 +2804,17 @@ VALUES ('legacy.exe', 'Legacy App', NULL, NULL, 0, ?, ?, ?, ?)
                 .expect("connect store"),
             database_path,
         )
+    }
+
+    fn unique_database_path() -> PathBuf {
+        let counter = TEST_DB_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let unique = format!(
+            "timeline-test-{}-{}-{}.sqlite",
+            std::process::id(),
+            OffsetDateTime::now_utc().unix_timestamp_nanos(),
+            counter,
+        );
+        std::env::temp_dir().join(unique)
     }
 
     fn temp_lock_path(database_path: &std::path::Path) -> PathBuf {

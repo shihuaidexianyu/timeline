@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 
 export const PAGE_ITEMS = [
   { id: 'stats', label: '统计' },
-  { id: 'timeline', label: '时间线' },
+  { id: 'usage', label: '趋势' },
   { id: 'settings', label: '设置' },
 ] as const
 
@@ -37,21 +37,13 @@ export function useHashRoute(): [AppPage, (page: AppPage) => void] {
 
 export function pageFromHash(hash: string): AppPage {
   const normalized = hash.replace(/^#\/?/, '')
-  if (normalized === 'timeline' || normalized === 'settings' || normalized === 'stats') {
+  if (normalized === 'settings' || normalized === 'usage' || normalized === 'stats') {
     return normalized
   }
   return 'stats'
 }
 
 export function pageMeta(page: AppPage) {
-  if (page === 'timeline') {
-    return {
-      kicker: '时间线',
-      title: '时间线',
-      description: '查看当前窗口内的事件分布与进程记录。',
-    }
-  }
-
   if (page === 'settings') {
     return {
       kicker: '设置',
@@ -60,9 +52,17 @@ export function pageMeta(page: AppPage) {
     }
   }
 
+  if (page === 'usage') {
+    return {
+      kicker: '趋势',
+      title: '使用趋势',
+      description: '按日、周、月查看应用使用变化。',
+    }
+  }
+
   return {
     kicker: '统计',
     title: '统计概览',
-    description: '按天查看应用使用、状态分布和周期变化。',
+    description: '按天查看应用使用、状态分布和使用热度。',
   }
 }

@@ -1,14 +1,11 @@
-import { useState } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import type {
-    AppUsageTrendResponse,
     DaySummary,
     PeriodSummaryResponse,
-    TrendPeriod,
     UsageMetric,
 } from '../api'
-import { AppUsageTrendChart } from '../components/app-usage-trend-chart'
 import { CalendarGrid } from '../components/calendar-grid'
-import { CompactDonutChart, DonutChart } from '../components/donut-chart'
+import { ChartLazyFallback } from '../components/chart-lazy-fallback'
 import {
     createWeeklySkeletonBars,
     formatPercent,
@@ -19,12 +16,25 @@ import {
 import { RefreshBadge } from '../shared/ui'
 import {
     formatDuration,
+    presenceColor,
     type DashboardFilter,
     type DashboardModel,
     type DonutSlice,
 } from '../lib/chart-model'
 import type { WeekBarDatum } from '../lib/dashboard-helpers'
 export type { WeekBarDatum } from '../lib/dashboard-helpers'
+
+const LazyDonutChart = lazy(() =>
+    import('../components/donut-chart').then((module) => ({
+        default: module.DonutChart,
+    })),
+)
+
+const LazyCompactDonutChart = lazy(() =>
+    import('../components/donut-chart').then((module) => ({
+        default: module.CompactDonutChart,
+    })),
+)
 
 export function StatsPage(props: {
     dashboard: DashboardModel | null
@@ -34,11 +44,7 @@ export function StatsPage(props: {
     setAppFilter: (value: DashboardFilter) => void
     setDomainFilter: (value: DashboardFilter) => void
     periodSummary: PeriodSummaryResponse | null
-    appTrend: AppUsageTrendResponse | null
-    appTrendPeriod: TrendPeriod
-    setAppTrendPeriod: (value: TrendPeriod) => void
     appUsageMetric: UsageMetric
-    setAppUsageMetric: (value: UsageMetric) => void
     appStats: DonutSlice[]
     appStatsTotalSeconds: number
     calendarDays: DaySummary[]
@@ -49,10 +55,8 @@ export function StatsPage(props: {
     weekBars: WeekBarDatum[]
     isTimelineRefreshing: boolean
     isPeriodRefreshing: boolean
-    isAppTrendRefreshing: boolean
     isAppStatsRefreshing: boolean
     isCalendarRefreshing: boolean
-    appTrendError: string | null
     appStatsError: string | null
     onCalendarMonthChange: (month: string) => void
     onSelectDate: (date: string) => void
@@ -62,7 +66,6 @@ export function StatsPage(props: {
     )
     const appDistributionLoading =
         props.loading || (props.isAppStatsRefreshing && props.appStats.length === 0)
-    const showVisibleMetricNote = props.appUsageMetric === 'visible_window'
 
     return (
         <section className="page-stack">
@@ -84,74 +87,28 @@ export function StatsPage(props: {
                 />
             </section>
 
-            <section className="stats-trend-section">
-                <div className="panel page-panel stats-trend-card">
-                    <div className="panel-header stats-trend-header">
-                        <div>
-                            <h2>应用趋势</h2>
-                        </div>
-                        <div className="stats-trend-actions">
-                            <RefreshBadge active={props.isAppTrendRefreshing} />
-                            <MetricSwitch
-                                value={props.appUsageMetric}
-                                onChange={props.setAppUsageMetric}
-                            />
-                            <div className="ui-segmented" aria-label="应用趋势范围">
-                                <button
-                                    type="button"
-                                    className={props.appTrendPeriod === 'week' ? 'is-active' : ''}
-                                    onClick={() => props.setAppTrendPeriod('week')}
-                                >
-                                    周
-                                </button>
-                                <button
-                                    type="button"
-                                    className={props.appTrendPeriod === 'month' ? 'is-active' : ''}
-                                    onClick={() => props.setAppTrendPeriod('month')}
-                                >
-                                    月
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                    {props.appTrendError && !props.appTrend ? (
-                        <div className="state-card error-card">{props.appTrendError}</div>
-                    ) : (
-                        <>
-                            {showVisibleMetricNote ? (
-                                <p className="stats-metric-note">
-                                    可见窗口可并行累计，总和可能超过活跃时长。
-                                </p>
-                            ) : null}
-                            <AppUsageTrendChart
-                                trend={props.appTrend}
-                                loading={props.loading || (props.isAppTrendRefreshing && !props.appTrend)}
-                            />
-                        </>
-                    )}
-                </div>
-            </section>
-
             <section className="stats-analysis-grid">
                 <div className="panel page-panel stats-analysis-card">
                     <div className="panel-header">
                         <div>
-                            <h2>应用分布</h2>
+                            <h2>{props.appUsageMetric === 'visible_window' ? '可见窗口分布' : '应用分布'}</h2>
                         </div>
                         <RefreshBadge active={props.isAppStatsRefreshing} />
                     </div>
                     {props.appStatsError && props.appStats.length === 0 ? (
                         <div className="state-card error-card">{props.appStatsError}</div>
                     ) : (
-                        <DonutChart
-                            loading={appDistributionLoading}
-                            title="应用分布"
-                            totalLabel={formatDuration(props.appStatsTotalSeconds)}
-                            slices={props.appStats}
-                            filter={props.appFilter}
-                            filterKind="app"
-                            onSelect={props.setAppFilter}
-                        />
+                        <Suspense fallback={<ChartLazyFallback variant="donut" />}>
+                            <LazyDonutChart
+                                loading={appDistributionLoading}
+                                title={props.appUsageMetric === 'visible_window' ? '可见窗口分布' : '应用分布'}
+                                totalLabel={formatDuration(props.appStatsTotalSeconds)}
+                                slices={props.appStats}
+                                filter={props.appFilter}
+                                filterKind="app"
+                                onSelect={props.setAppFilter}
+                            />
+                        </Suspense>
                     )}
                 </div>
 
@@ -162,15 +119,17 @@ export function StatsPage(props: {
                         </div>
                         <RefreshBadge active={props.isTimelineRefreshing} />
                     </div>
-                    <DonutChart
-                        loading={props.loading}
-                        title="域名分布"
-                        totalLabel={formatDuration(sumSlices(props.dashboard?.domainSlices ?? []))}
-                        slices={props.dashboard?.domainSlices ?? []}
-                        filter={props.domainFilter}
-                        filterKind="domain"
-                        onSelect={props.setDomainFilter}
-                    />
+                    <Suspense fallback={<ChartLazyFallback variant="donut" />}>
+                        <LazyDonutChart
+                            loading={props.loading}
+                            title="域名分布"
+                            totalLabel={formatDuration(sumSlices(props.dashboard?.domainSlices ?? []))}
+                            slices={props.dashboard?.domainSlices ?? []}
+                            filter={props.domainFilter}
+                            filterKind="domain"
+                            onSelect={props.setDomainFilter}
+                        />
+                    </Suspense>
                 </div>
 
                 <div className="panel page-panel stats-calendar-card">
@@ -201,30 +160,6 @@ export function StatsPage(props: {
     )
 }
 
-function MetricSwitch(props: {
-    value: UsageMetric
-    onChange: (value: UsageMetric) => void
-}) {
-    return (
-        <div className="ui-segmented" aria-label="应用统计口径">
-            <button
-                type="button"
-                className={props.value === 'visible_window' ? 'is-active' : ''}
-                onClick={() => props.onChange('visible_window')}
-            >
-                可见窗口
-            </button>
-            <button
-                type="button"
-                className={props.value === 'focus' ? 'is-active' : ''}
-                onClick={() => props.onChange('focus')}
-            >
-                前台焦点
-            </button>
-        </div>
-    )
-}
-
 function WeeklyRhythmCard(props: {
     loading: boolean
     periodSummary: PeriodSummaryResponse | null
@@ -249,7 +184,7 @@ function WeeklyRhythmCard(props: {
                     <RefreshBadge active={props.refreshing} />
                     <div className="weekly-legend" aria-label="本周节奏图例">
                         <span className="weekly-legend-item is-active">活跃</span>
-                        <span className="weekly-legend-item is-focus">应用</span>
+                        <span className="weekly-legend-item is-focus">前台</span>
                     </div>
                 </div>
             </div>
@@ -284,7 +219,7 @@ function WeeklyRhythmCard(props: {
                         {showLoadingSkeleton ? (
                             <span className="skeleton-block skeleton-inline skeleton-stat-caption" />
                         ) : (
-                            `本周应用 · 当月 ${formatDuration(monthFocusTotal)}`
+                            `本周前台 · 当月 ${formatDuration(monthFocusTotal)}`
                         )}
                     </small>
                 </div>
@@ -328,7 +263,7 @@ function FocusBalanceCard(props: {
             label: '活跃',
             value: props.activeSeconds,
             percentage: presenceTotal === 0 ? 0 : (props.activeSeconds / presenceTotal) * 100,
-            color: '#2f6fed',
+            color: presenceColor('active'),
         },
         {
             id: 'presence-idle',
@@ -336,7 +271,7 @@ function FocusBalanceCard(props: {
             label: '空闲',
             value: props.idleSeconds,
             percentage: presenceTotal === 0 ? 0 : (props.idleSeconds / presenceTotal) * 100,
-            color: '#14b8a6',
+            color: presenceColor('idle'),
         },
         {
             id: 'presence-locked',
@@ -344,7 +279,7 @@ function FocusBalanceCard(props: {
             label: '锁定',
             value: props.lockedSeconds,
             percentage: presenceTotal === 0 ? 0 : (props.lockedSeconds / presenceTotal) * 100,
-            color: '#8da0b6',
+            color: presenceColor('locked'),
         },
     ]
 
@@ -360,21 +295,23 @@ function FocusBalanceCard(props: {
             <div className="focus-distribution-layout">
                 <div className="showcase-donut-wrap">
                     <div className="showcase-compact-donut">
-                        <CompactDonutChart
-                            loading={props.loading}
-                            slices={presenceSlices}
-                            totalLabel={formatDuration(selectedPresenceValue)}
-                            secondaryLabel={selectedPresenceLabel}
-                            footerLabel={`总状态 ${formatDuration(presenceTotal)}`}
-                            selectedKey={selectedPresenceKey}
-                            onSelectKey={(key) => {
-                                if (key === 'active' || key === 'idle' || key === 'locked') {
-                                    setSelectedPresenceKey(key)
-                                }
-                            }}
-                            height={232}
-                            emptyLabel="所选日期没有状态分布数据"
-                        />
+                        <Suspense fallback={<ChartLazyFallback variant="compact-donut" />}>
+                            <LazyCompactDonutChart
+                                loading={props.loading}
+                                slices={presenceSlices}
+                                totalLabel={formatDuration(selectedPresenceValue)}
+                                secondaryLabel={selectedPresenceLabel}
+                                footerLabel={`总状态 ${formatDuration(presenceTotal)}`}
+                                selectedKey={selectedPresenceKey}
+                                onSelectKey={(key) => {
+                                    if (key === 'active' || key === 'idle' || key === 'locked') {
+                                        setSelectedPresenceKey(key)
+                                    }
+                                }}
+                                height={232}
+                                emptyLabel="所选日期没有状态分布数据"
+                            />
+                        </Suspense>
                     </div>
                 </div>
 
@@ -507,8 +444,8 @@ function WeeklyBarChart(props: {
                                 }}
                                 disabled={props.loading}
                                 aria-pressed={bar.isSelected}
-                                aria-label={`${bar.date}，活跃 ${formatDuration(bar.activeSeconds)}，应用 ${formatDuration(normalizedFocusSeconds)}`}
-                                title={`${bar.date} 活跃 ${formatDuration(bar.activeSeconds)} · 应用 ${formatDuration(normalizedFocusSeconds)}`}
+                                aria-label={`${bar.date}，活跃 ${formatDuration(bar.activeSeconds)}，前台 ${formatDuration(normalizedFocusSeconds)}`}
+                                title={`${bar.date} 活跃 ${formatDuration(bar.activeSeconds)} · 前台 ${formatDuration(normalizedFocusSeconds)}`}
                             >
                                 <div className={`weekly-bar-track ${props.loading ? 'weekly-bar-track-skeleton' : ''}`}>
                                     <div
@@ -550,5 +487,3 @@ function WeeklyBarChart(props: {
         </div>
     )
 }
-
-

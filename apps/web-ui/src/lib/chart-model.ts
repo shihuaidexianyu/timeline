@@ -6,6 +6,7 @@ import type {
   FocusSegment,
   PresenceSegment,
   TimelineDayResponse,
+  VisibleWindowSegment,
 } from '../api'
 
 const DAY_SECONDS = 24 * 60 * 60
@@ -86,7 +87,7 @@ export type ChartSegment = {
   key: string
   label: string
   detail: string
-  tone: 'focus' | 'browser' | 'presence'
+  tone: 'focus' | 'browser' | 'presence' | 'visible'
   startSec: number
   endSec: number
   durationSec: number
@@ -105,6 +106,7 @@ export type DonutSlice = {
 
 export type DashboardModel = {
   focusSegments: ChartSegment[]
+  visibleWindowSegments: ChartSegment[]
   browserSegments: ChartSegment[]
   presenceSegments: ChartSegment[]
   appSlices: DonutSlice[]
@@ -154,6 +156,12 @@ export function buildDashboardModel(
     timeContext,
   )
   const focusSegmentsWithColor = assignDistinctColors(focusSegments, 'app')
+  const visibleWindowSegments = toVisibleWindowChartSegments(
+    timeline.visible_window_segments ?? [],
+    activeOnly ? activeIntervals : null,
+    timeContext,
+  )
+  const visibleWindowSegmentsWithColor = assignDistinctColors(visibleWindowSegments, 'app')
   const browserSegments = toBrowserChartSegments(
     timeline.browser_segments,
     activeOnly ? activeIntervals : null,
@@ -164,6 +172,7 @@ export function buildDashboardModel(
 
   return {
     focusSegments: focusSegmentsWithColor,
+    visibleWindowSegments: visibleWindowSegmentsWithColor,
     browserSegments: browserSegmentsWithColor,
     presenceSegments,
     appSlices: buildDonutSlices(focusSegmentsWithColor, 6),
@@ -362,6 +371,38 @@ function toBrowserChartSegments(
   return results
 }
 
+function toVisibleWindowChartSegments(
+  segments: VisibleWindowSegment[],
+  activeIntervals: Interval[] | null,
+  timeContext: TimelineTimeContext,
+) {
+  const results: ChartSegment[] = []
+
+  for (const segment of segments) {
+    const ranges = clipSegment(
+      toRange(segment.started_at, segment.ended_at, timeContext),
+      activeIntervals,
+    )
+
+    ranges.forEach((range, index) => {
+      results.push({
+        id: `visible-${segment.id}-${index}`,
+        key: segment.app.process_name,
+        label: segment.app.display_name,
+        detail: segment.app.window_title ?? segment.app.process_name,
+        tone: 'visible',
+        startSec: range.startSec,
+        endSec: range.endSec,
+        durationSec: range.endSec - range.startSec,
+        color: '',
+        isBrowser: segment.app.is_browser,
+      })
+    })
+  }
+
+  return mergeAdjacentAppSegments(results)
+}
+
 function toPresenceChartSegments(
   segments: PresenceSegment[],
   timeContext: TimelineTimeContext,
@@ -391,6 +432,10 @@ function toPresenceChartSegments(
 }
 
 function mergeAdjacentFocusSegments(segments: ChartSegment[]) {
+  return mergeAdjacentAppSegments(segments)
+}
+
+function mergeAdjacentAppSegments(segments: ChartSegment[]) {
   if (segments.length <= 1) {
     return segments
   }
@@ -408,8 +453,8 @@ function mergeAdjacentFocusSegments(segments: ChartSegment[]) {
     const previous = merged[merged.length - 1]
     if (
       previous &&
-      previous.tone === 'focus' &&
-      segment.tone === 'focus' &&
+      previous.tone === segment.tone &&
+      (segment.tone === 'focus' || segment.tone === 'visible') &&
       previous.key === segment.key &&
       previous.isBrowser === segment.isBrowser &&
       segment.startSec - previous.endSec <= MERGE_GAP_SECONDS
@@ -417,7 +462,7 @@ function mergeAdjacentFocusSegments(segments: ChartSegment[]) {
       const nextEndSec = Math.max(previous.endSec, segment.endSec)
       merged[merged.length - 1] = {
         ...previous,
-        id: `focus-merged-${previous.key}-${previous.startSec}-${nextEndSec}`,
+        id: `${segment.tone}-merged-${previous.key}-${previous.startSec}-${nextEndSec}`,
         endSec: nextEndSec,
         durationSec: nextEndSec - previous.startSec,
         detail:
@@ -652,7 +697,7 @@ function presenceLabel(state: PresenceSegment['state']) {
   return '锁定'
 }
 
-function presenceColor(state: PresenceSegment['state']) {
+export function presenceColor(state: PresenceSegment['state']) {
   const dark = isDarkTheme()
   if (state === 'active') {
     return dark ? '#4ad4a3' : '#3fb68a'

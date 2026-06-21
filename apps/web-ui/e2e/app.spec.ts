@@ -8,30 +8,44 @@ test('stats page renders without invalid text', async ({ page }) => {
   await page.goto('/#/stats')
 
   await expect(page.getByRole('heading', { name: '统计概览' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: '应用趋势' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '可见窗口' })).toHaveClass(/is-active/)
-  await expect(page.getByText('可见窗口可并行累计')).toBeVisible()
+  await expect(page.getByRole('heading', { name: '本周节奏' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '状态分布' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '可见窗口分布' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: '使用热度' })).toBeVisible()
   await expect(page.locator('body')).not.toContainText(/NaN|undefined/)
 })
 
-test('stats app metric switches trend and distribution together', async ({ page }) => {
-  await page.goto('/#/stats')
+test('usage page renders the default visible-window day trend', async ({ page }) => {
+  await page.goto('/#/usage')
 
+  await expect(page.getByRole('heading', { name: '使用趋势' }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: '日内' })).toHaveClass(/is-active/)
+  await expect(page.getByRole('button', { name: '可见窗口' })).toHaveClass(/is-active/)
+  await expect(page.getByText(/占据所在屏幕至少 25%/)).toBeVisible()
+  await expect(page.getByLabel('应用日内趋势折线图')).toBeVisible()
+  await expect(page.locator('body')).not.toContainText(/NaN|undefined/)
+})
+
+test('usage app metric switches the day trend source', async ({ page }) => {
+  await page.goto('/#/usage')
+
+  await expect(page.getByText('可见窗口口径', { exact: true })).toBeVisible()
   await expect(page.getByText('Cursor').first()).toBeVisible()
   await page.getByRole('button', { name: '前台焦点' }).click()
 
   await expect(page.getByRole('button', { name: '前台焦点' })).toHaveClass(/is-active/)
-  await expect(page.getByText('可见窗口可并行累计')).toHaveCount(0)
-  await expect(page.getByText('Focus Only').first()).toBeVisible()
+  await expect(page.getByText(/占据所在屏幕至少 25%/)).toHaveCount(0)
+  await expect(page.getByText('前台焦点口径', { exact: true })).toBeVisible()
+  await expect(page.getByText(/同一时刻只累计一个应用/)).toBeVisible()
+  await expect(page.getByText('Microsoft Edge').first()).toBeVisible()
   await expect(page.locator('body')).not.toContainText(/NaN|undefined/)
 })
 
-test('timeline search matches browser domains', async ({ page }) => {
+test('legacy timeline route falls back to stats', async ({ page }) => {
   await page.goto('/#/timeline')
 
-  await expect(page.getByPlaceholder('应用、标题、域名')).toBeVisible()
-  await page.getByPlaceholder('应用、标题、域名').fill('treehole')
-  await expect(page.getByText('treehole.pku.edu.cn').first()).toBeVisible()
+  await expect(page.getByRole('heading', { name: '统计概览' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '统计' })).toHaveClass(/is-active/)
   await expect(page.locator('body')).not.toContainText(/NaN|undefined/)
 })
 
@@ -39,7 +53,7 @@ test('dark theme is applied from stored preference', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('timeline-theme', 'dark')
   })
-  await page.goto('/#/timeline')
+  await page.goto('/#/usage')
 
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark')
 })
@@ -134,7 +148,7 @@ const timelineDay = {
         process_name: 'Code.exe',
         display_name: 'Visual Studio Code',
         exe_path: null,
-        window_title: 'timeline-page.tsx',
+        window_title: 'usage-page.tsx',
         is_browser: false,
       },
     },
@@ -156,6 +170,38 @@ const timelineDay = {
       state: 'active',
       started_at: '2026-05-19T02:00:00Z',
       ended_at: '2026-05-19T03:00:00Z',
+    },
+  ],
+  visible_window_segments: [
+    {
+      id: 1,
+      started_at: '2026-05-19T02:00:00Z',
+      ended_at: '2026-05-19T02:30:00Z',
+      app: {
+        process_name: 'cursor.exe',
+        display_name: 'Cursor',
+        exe_path: 'C:\\Apps\\cursor.exe',
+        window_title: 'Cursor',
+        is_browser: false,
+      },
+      hwnd: 100,
+      process_id: 10,
+      visible_area_ratio: 0.5,
+    },
+    {
+      id: 2,
+      started_at: '2026-05-19T02:30:00Z',
+      ended_at: '2026-05-19T03:00:00Z',
+      app: {
+        process_name: 'Code.exe',
+        display_name: 'Visual Studio Code',
+        exe_path: 'C:\\Apps\\Code.exe',
+        window_title: 'usage-page.tsx',
+        is_browser: false,
+      },
+      hwnd: 200,
+      process_id: 20,
+      visible_area_ratio: 0.5,
     },
   ],
 }

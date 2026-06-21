@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import {
   API_BASE_URL,
+  type AgentMonitorStatus,
   type AgentSettingsResponse,
   type UpdateAgentConfigRequest,
 } from '../api'
@@ -144,7 +145,7 @@ export function SettingsPage(props: {
                   <div className="settings-winui-divider" />
                   <div className="settings-winui-row">
                     <div className="settings-winui-row-label">当前日期</div>
-                    <div className="settings-winui-row-desc">时间线页面默认选中的日期</div>
+                    <div className="settings-winui-row-desc">统计和趋势页面当前选中的日期</div>
                     <div className="settings-winui-row-control">
                       <span className="settings-winui-value">{props.selectedDate}</span>
                     </div>
@@ -180,34 +181,146 @@ export function SettingsPage(props: {
           <section className="settings-winui-section">
             <h3 className="settings-winui-section-title">监视器</h3>
             <div className="settings-winui-card">
-              <div className="settings-winui-card-subtitle">各采集模块的运行状态</div>
-              <div className="monitor-list">
-                {props.loading ? (
-                  <MonitorListSkeleton />
-                ) : (
-                  props.agentSettings?.monitors.map((monitor) => (
-                    <article key={monitor.key} className={`monitor-card is-${monitor.status}`}>
-                      <div className="monitor-card-status-bar" aria-hidden="true" />
-                      <div className="monitor-card-body">
-                        <div className="monitor-head">
-                          <strong>{monitor.label}</strong>
-                          <span className={`monitor-badge is-${monitor.status}`}>{monitor.status}</span>
-                        </div>
-                        <p>{monitor.detail}</p>
-                        <small>
-                          {monitor.last_seen ? `最后活跃 ${new Date(monitor.last_seen).toLocaleTimeString()}` : '等待首次心跳'}
-                        </small>
-                      </div>
-                    </article>
-                  )) ?? <div className="empty-card">读取中…</div>
-                )}
-              </div>
+              {props.loading ? (
+                <MonitorListSkeleton />
+              ) : (
+                <MonitorStatusPanel monitors={props.agentSettings?.monitors ?? []} />
+              )}
             </div>
           </section>
         </div>
       </div>
     </section>
   )
+}
+
+function MonitorStatusPanel(props: { monitors: AgentMonitorStatus[] }) {
+  const summary = getMonitorSummary(props.monitors)
+
+  return (
+    <>
+      <div className={`monitor-summary is-${summary.tone}`}>
+        <span className="monitor-summary-indicator" aria-hidden="true" />
+        <div>
+          <div className="monitor-summary-title">{summary.title}</div>
+          <div className="monitor-summary-subtitle">{summary.subtitle}</div>
+        </div>
+      </div>
+
+      <div className="monitor-list" role="list" aria-label="采集模块状态">
+        {props.monitors.length > 0 ? (
+          props.monitors.map((monitor) => (
+            <article
+              key={monitor.key}
+              className={`monitor-row is-${monitorStatusTone(monitor.status)}`}
+              role="listitem"
+            >
+              <span className="monitor-row-dot" aria-hidden="true" />
+              <div className="monitor-row-main">
+                <strong>{monitor.label}</strong>
+                <p>{monitor.detail}</p>
+              </div>
+              <div className="monitor-row-meta">
+                <span className={`monitor-badge is-${monitorStatusTone(monitor.status)}`}>
+                  {monitorStatusLabel(monitor.status)}
+                </span>
+                <span className="monitor-last-seen">{formatMonitorLastSeen(monitor.last_seen)}</span>
+              </div>
+            </article>
+          ))
+        ) : (
+          <div className="monitor-empty">等待采集模块上报心跳</div>
+        )}
+      </div>
+    </>
+  )
+}
+
+type MonitorTone = 'online' | 'stale' | 'waiting'
+
+function monitorStatusTone(status: string): MonitorTone {
+  if (status === 'online') {
+    return 'online'
+  }
+
+  if (status === 'stale') {
+    return 'stale'
+  }
+
+  return 'waiting'
+}
+
+function monitorStatusLabel(status: string) {
+  if (status === 'online') {
+    return '正常'
+  }
+
+  if (status === 'stale') {
+    return '延迟'
+  }
+
+  if (status === 'disabled') {
+    return '关闭'
+  }
+
+  if (status === 'waiting') {
+    return '等待'
+  }
+
+  return status
+}
+
+function formatMonitorLastSeen(lastSeen: string | null) {
+  if (!lastSeen) {
+    return '未收到'
+  }
+
+  const date = new Date(lastSeen)
+  if (Number.isNaN(date.getTime())) {
+    return '时间未知'
+  }
+
+  return date.toLocaleTimeString()
+}
+
+function getMonitorSummary(monitors: AgentMonitorStatus[]): {
+  title: string
+  subtitle: string
+  tone: MonitorTone
+} {
+  if (monitors.length === 0) {
+    return {
+      title: '等待采集模块心跳',
+      subtitle: '启动后会在这里显示各模块状态',
+      tone: 'waiting',
+    }
+  }
+
+  const onlineCount = monitors.filter((monitor) => monitor.status === 'online').length
+  const staleCount = monitors.filter((monitor) => monitor.status === 'stale').length
+  const inactiveCount = monitors.length - onlineCount - staleCount
+
+  if (staleCount > 0) {
+    return {
+      title: `${staleCount} 个模块需要注意`,
+      subtitle: `${onlineCount} 个正常，检查最近心跳时间`,
+      tone: 'stale',
+    }
+  }
+
+  if (inactiveCount > 0) {
+    return {
+      title: `${onlineCount} 个正常，${inactiveCount} 个未运行`,
+      subtitle: '等待或关闭的模块不会影响已启用采集',
+      tone: 'waiting',
+    }
+  }
+
+  return {
+    title: `${monitors.length} 个采集模块正常`,
+    subtitle: '采集服务正在稳定运行',
+    tone: 'online',
+  }
 }
 
 function ToggleSwitch(props: {
@@ -471,16 +584,23 @@ function SettingsConfigSkeleton() {
 function MonitorListSkeleton() {
   return (
     <>
+      <div className="monitor-summary monitor-summary-skeleton" aria-hidden="true">
+        <span className="skeleton-block skeleton-inline skeleton-monitor-dot" />
+        <div>
+          <span className="skeleton-block skeleton-inline skeleton-monitor-title" />
+          <span className="skeleton-block skeleton-inline skeleton-monitor-line skeleton-monitor-line-short" />
+        </div>
+      </div>
       {Array.from({ length: 3 }, (_, index) => (
-        <article key={`monitor-skeleton-${index}`} className="monitor-card monitor-card-skeleton">
-          <div className="monitor-card-status-bar" aria-hidden="true" />
-          <div className="monitor-card-body">
-            <div className="monitor-head">
-              <span className="skeleton-block skeleton-inline skeleton-monitor-title" />
-              <span className="skeleton-block skeleton-inline skeleton-monitor-badge" />
-            </div>
+        <article key={`monitor-skeleton-${index}`} className="monitor-row monitor-row-skeleton">
+          <span className="skeleton-block skeleton-inline skeleton-monitor-dot" />
+          <div className="monitor-row-main">
+            <span className="skeleton-block skeleton-inline skeleton-monitor-title" />
             <span className="skeleton-block skeleton-inline skeleton-monitor-line" />
-            <span className="skeleton-block skeleton-inline skeleton-monitor-line skeleton-monitor-line-short" />
+          </div>
+          <div className="monitor-row-meta">
+            <span className="skeleton-block skeleton-inline skeleton-monitor-badge" />
+            <span className="skeleton-block skeleton-inline skeleton-monitor-time" />
           </div>
         </article>
       ))}

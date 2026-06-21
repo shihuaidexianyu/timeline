@@ -28,25 +28,6 @@
   --surface-calendar-heat-3: #7bbdd2;
   --surface-calendar-heat-4: #3a9cb8;
 
-  --surface-timeline-panel: var(--surface-panel);
-  --surface-timeline-toolbar: var(--surface-subtle);
-  --surface-timeline-toolbar-group: var(--surface-panel);
-  --surface-timeline-card: var(--surface-subtle);
-  --surface-timeline-devtools: var(--surface-panel);
-  --surface-timeline-devtools-head: var(--surface-subtle);
-  --surface-timeline-pill: var(--surface-subtle);
-  --surface-timeline-inspector: var(--surface-subtle);
-  --surface-timeline-inspector-active: var(--surface-muted);
-  --surface-timeline-lanes: var(--surface-panel);
-  --surface-timeline-table: var(--surface-panel);
-  --surface-timeline-table-head: var(--surface-subtle);
-  --surface-timeline-table-row: var(--surface-panel);
-  --surface-timeline-table-row-hover: var(--surface-hover);
-  --surface-timeline-overview: var(--surface-subtle);
-  --surface-timeline-overview-window: var(--accent-soft);
-  --surface-timeline-overview-panel: var(--surface-panel);
-  --surface-timeline-marker-label: var(--text-main);
-
   --surface-skeleton: linear-gradient(90deg, var(--skeleton-base) 0%, var(--skeleton-shine) 50%, var(--skeleton-base) 100%);
 
   /* Component-level text tokens */
@@ -55,9 +36,6 @@
   --text-subtle: var(--text-dim);
   --text-help: var(--text-soft);
   --text-weekly-hover: var(--text-main);
-  --text-timeline-strong: var(--text-main);
-  --text-timeline-muted: var(--text-soft);
-  --text-timeline-pill: var(--text-soft);
 
   /* Component-level border tokens */
   --border-subtle: var(--panel-border);
@@ -66,9 +44,6 @@
   --border-chart-canvas: transparent;
   --border-tooltip: var(--panel-border);
   --border-calendar-cell: var(--border-card);
-  --border-timeline: var(--panel-border);
-  --border-timeline-soft: var(--border-card);
-  --border-timeline-strong: var(--border-control);
   --border-danger: var(--danger-soft);
 
   /* Component-level accent aliases */
@@ -82,16 +57,11 @@
   --chart-presence-idle: var(--presence-idle);
   --chart-presence-locked: var(--presence-locked);
 
-  --timeline-marker-color: var(--accent-color);
-
   /* Shadow tokens: converge to none except global panel shadow */
   --shadow-showcase: none;
   --shadow-switch-track: inset 0 0 0 1px rgba(18, 24, 35, 0.06);
   --shadow-switch-track-active: none;
   --shadow-switch-thumb: 0 1px 2px rgba(18, 24, 35, 0.12);
-  --shadow-timeline-panel: none;
-  --shadow-timeline-overview: none;
-  --shadow-timeline-marker: none;
   --shadow-weekly-hover: none;
   --shadow-weekly-focus: var(--focus-ring);
   --shadow-weekly-selected: 0 0 0 2px var(--accent-border);
@@ -127,51 +97,21 @@ html[data-theme="dark"] {
   --surface-calendar-heat-3: #3a7a8f;
   --surface-calendar-heat-4: #5dbed8;
 
-  --surface-timeline-panel: var(--surface-panel);
-  --surface-timeline-toolbar: var(--surface-subtle);
-  --surface-timeline-toolbar-group: var(--surface-panel);
-  --surface-timeline-card: var(--surface-subtle);
-  --surface-timeline-devtools: var(--surface-panel);
-  --surface-timeline-devtools-head: var(--surface-subtle);
-  --surface-timeline-pill: var(--surface-subtle);
-  --surface-timeline-inspector: var(--surface-subtle);
-  --surface-timeline-inspector-active: var(--surface-muted);
-  --surface-timeline-lanes: var(--surface-panel);
-  --surface-timeline-table: var(--surface-panel);
-  --surface-timeline-table-head: var(--surface-subtle);
-  --surface-timeline-table-row: var(--surface-panel);
-  --surface-timeline-table-row-hover: var(--surface-hover);
-  --surface-timeline-overview: var(--surface-subtle);
-  --surface-timeline-overview-window: var(--accent-soft);
-  --surface-timeline-overview-panel: var(--surface-panel);
-  --surface-timeline-marker-label: var(--text-main);
-
   --surface-skeleton: linear-gradient(90deg, var(--skeleton-base) 25%, var(--skeleton-shine) 50%, var(--skeleton-base) 75%);
 
   --text-help: var(--text-soft);
   --text-weekly-hover: var(--text-main);
-  --text-timeline-strong: var(--text-main);
-  --text-timeline-muted: var(--text-soft);
-  --text-timeline-pill: var(--text-soft);
 
   --border-card-strong: var(--border-card);
   --border-chart-canvas: transparent;
   --border-tooltip: var(--panel-border);
   --border-calendar-cell: var(--border-card);
-  --border-timeline: var(--panel-border);
-  --border-timeline-soft: var(--border-card);
-  --border-timeline-strong: var(--border-control);
   --border-danger: var(--danger-soft);
-
-  --timeline-marker-color: var(--accent-color);
 
   --shadow-showcase: none;
   --shadow-switch-track: inset 0 0 0 1px rgba(0, 0, 0, 0.2);
   --shadow-switch-track-active: none;
   --shadow-switch-thumb: 0 1px 2px rgba(0, 0, 0, 0.24);
-  --shadow-timeline-panel: none;
-  --shadow-timeline-overview: none;
-  --shadow-timeline-marker: none;
   --shadow-weekly-hover: none;
   --shadow-weekly-focus: var(--focus-ring);
   --shadow-weekly-selected: 0 0 0 2px var(--accent-border);

@@ -18,6 +18,7 @@ const settings: AgentSettingsResponse = {
   record_page_titles: true,
   ignored_apps: [],
   ignored_domains: [],
+  domain_groups: [],
   monitors: [
     {
       key: 'focus_tracker',

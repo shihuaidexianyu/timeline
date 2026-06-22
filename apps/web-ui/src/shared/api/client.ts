@@ -189,6 +189,7 @@ export function getAgentSettings(signal?: AbortSignal) {
       typeof raw.record_page_titles === 'boolean' ? raw.record_page_titles : true,
     ignored_apps: Array.isArray(raw.ignored_apps) ? raw.ignored_apps : [],
     ignored_domains: Array.isArray(raw.ignored_domains) ? raw.ignored_domains : [],
+    domain_groups: Array.isArray(raw.domain_groups) ? raw.domain_groups : [],
   }))
 }
 

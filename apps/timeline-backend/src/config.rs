@@ -40,6 +40,11 @@ pub struct AppConfig {
     /// 设为 0 表示永不清理。默认 365 天。daily rollup 汇总表不受此限制，
     /// 统计与日历数据不会丢失。
     pub data_retention_days: u64,
+    /// 域名归组规则。每项格式为 `"归组名 = [域名1, 域名2, *.后缀]"`。
+    /// 上报的域名会按规则映射到归组名再存段，统计时按归组名聚合。
+    /// 例如 `["github = [github.com, gist.github.com, *.github.io]"]` 会把
+    /// 这些域名都归为 "github"。不在任何规则中的域名保持原样。
+    pub domain_groups: Vec<String>,
 }
 
 impl Default for AppConfig {
@@ -64,6 +69,7 @@ impl Default for AppConfig {
             log_retention_days: 7,
             debug_events_enabled: false,
             data_retention_days: 365,
+            domain_groups: Vec::new(),
         }
     }
 }

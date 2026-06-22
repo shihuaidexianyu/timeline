@@ -817,7 +817,15 @@ fn session_lock_state(session_flags: i32) -> Option<bool> {
 fn is_browser_process(process_name: &str) -> bool {
     matches!(
         process_name.to_ascii_lowercase().as_str(),
-        "chrome.exe" | "msedge.exe" | "firefox.exe" | "brave.exe"
+        "chrome.exe"
+            | "msedge.exe"
+            | "firefox.exe"
+            | "brave.exe"
+            | "vivaldi.exe"
+            | "opera.exe"
+            | "arc.exe"
+            | "thorium.exe"
+            | "duckduckgo.exe"
     )
 }
 

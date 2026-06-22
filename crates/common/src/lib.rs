@@ -163,6 +163,7 @@ pub struct AgentSettingsResponse {
     pub record_page_titles: bool,
     pub ignored_apps: Vec<String>,
     pub ignored_domains: Vec<String>,
+    pub domain_groups: Vec<String>,
     pub monitors: Vec<AgentMonitorStatus>,
 }
 
@@ -186,6 +187,7 @@ pub struct UpdateAgentConfigRequest {
     pub record_page_titles: bool,
     pub ignored_apps: Vec<String>,
     pub ignored_domains: Vec<String>,
+    pub domain_groups: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

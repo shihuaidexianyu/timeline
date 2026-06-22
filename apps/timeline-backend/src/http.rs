@@ -218,6 +218,7 @@ async fn get_settings(
         record_page_titles: runtime_config.record_page_titles,
         ignored_apps: runtime_config.ignored_apps,
         ignored_domains: runtime_config.ignored_domains,
+        domain_groups: runtime_config.domain_groups,
         monitors,
     })))
 }
@@ -246,6 +247,7 @@ async fn post_update_agent_config(
     next.record_page_titles = payload.record_page_titles;
     next.ignored_apps = sanitize_list(payload.ignored_apps);
     next.ignored_domains = sanitize_list(payload.ignored_domains);
+    next.domain_groups = sanitize_list(payload.domain_groups);
 
     next.validate()
         .map_err(|(code, message)| AppError::bad_request(code, message))?;

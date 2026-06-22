@@ -19,6 +19,7 @@ const settings: AgentSettingsResponse = {
   record_page_titles: false,
   ignored_apps: ['chrome.exe'],
   ignored_domains: ['example.com'],
+  domain_groups: [],
   monitors: [],
 }
 
@@ -28,6 +29,7 @@ describe('settings form', () => {
 
     expect(values.ignoredAppsText).toBe('chrome.exe')
     expect(values.ignoredDomainsText).toBe('example.com')
+    expect(values.domainGroupsText).toBe('')
     expect(settingsFormKey(settings)).toContain('120|1000|true')
   })
 
@@ -41,6 +43,7 @@ describe('settings form', () => {
       recordPageTitles: true,
       ignoredAppsText: 'foo.exe\nbar.exe',
       ignoredDomainsText: 'a.com, b.com',
+      domainGroupsText: 'github = [github.com, gist.github.com]',
     })
 
     expect(payload.idle_threshold_secs).toBe(15)
@@ -48,5 +51,6 @@ describe('settings form', () => {
     expect(payload.health_reminder_threshold_secs).toBe(300)
     expect(payload.ignored_apps).toEqual(['foo.exe', 'bar.exe'])
     expect(payload.ignored_domains).toEqual(['a.com', 'b.com'])
+    expect(payload.domain_groups).toEqual(['github = [github.com, gist.github.com]'])
   })
 })

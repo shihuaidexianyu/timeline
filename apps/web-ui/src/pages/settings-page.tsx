@@ -616,6 +616,15 @@ function SettingsConfigForm(props: {
             onChange={(event) => patchValues({ ignoredDomainsText: event.target.value })}
           />
         </label>
+        <label className="settings-config-field is-wide">
+          <span>域名归组（每行一个，格式：组名 = [域名1, 域名2, *.后缀]）</span>
+          <textarea
+            rows={3}
+            value={values.domainGroupsText}
+            onChange={(event) => patchValues({ domainGroupsText: event.target.value })}
+            placeholder="github = [github.com, gist.github.com, *.github.io]"
+          />
+        </label>
       </div>
 
       <div className="settings-form-actions">

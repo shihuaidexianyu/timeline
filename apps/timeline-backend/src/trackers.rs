@@ -637,6 +637,7 @@ pub async fn sync_browser_event(
 ) -> Result<common::BrowserEventAck> {
     let runtime_config = state.runtime_config_snapshot().await;
     let payload = browser_payload_for_storage(payload, runtime_config.record_page_titles);
+    let payload = apply_domain_group(&payload, &runtime_config.domain_groups);
     state.mark_browser_online(observed_at).await;
     state
         .store()
@@ -767,6 +768,64 @@ fn is_ignored_domain(runtime_config: &RuntimeConfigSnapshot, domain: &str) -> bo
     })
 }
 
+/// Maps a domain to its group key based on `domain_groups` config rules.
+/// Each rule is `"group_name = [domain1, domain2, *.suffix]"`. If the domain
+/// matches any pattern in any rule, it's replaced with the group name.
+/// Patterns support `*` wildcard. If no rule matches, the domain is unchanged.
+fn apply_domain_group(
+    payload: &common::BrowserEventPayload,
+    domain_groups: &[String],
+) -> common::BrowserEventPayload {
+    if domain_groups.is_empty() {
+        return payload.clone();
+    }
+
+    let rules = parse_domain_groups(domain_groups);
+    if rules.is_empty() {
+        return payload.clone();
+    }
+
+    let lower_domain = payload.domain.to_ascii_lowercase();
+    for (group_name, patterns) in &rules {
+        for pattern in patterns {
+            if matches_pattern(&lower_domain, pattern) {
+                return common::BrowserEventPayload {
+                    domain: group_name.clone(),
+                    ..payload.clone()
+                };
+            }
+        }
+    }
+
+    payload.clone()
+}
+
+/// Parses `domain_groups` config entries into `(group_name, patterns)` pairs.
+/// Each entry is `"group_name = [domain1, domain2, *.suffix]"`.
+/// Malformed entries are silently skipped.
+fn parse_domain_groups(entries: &[String]) -> Vec<(String, Vec<String>)> {
+    let mut rules = Vec::new();
+    for entry in entries {
+        let Some((name, list)) = entry.split_once('=') else {
+            continue;
+        };
+        let name = name.trim().to_ascii_lowercase();
+        if name.is_empty() {
+            continue;
+        }
+        let list = list.trim().trim_start_matches('[').trim_end_matches(']');
+        let patterns: Vec<String> = list
+            .split(',')
+            .map(|p| p.trim().to_ascii_lowercase())
+            .filter(|p| !p.is_empty())
+            .collect();
+        if !patterns.is_empty() {
+            rules.push((name, patterns));
+        }
+    }
+    rules
+}
+
 /// Matches a value against a pattern that may contain `*` (any sequence) and
 /// `?` (single char) wildcards. Falls back to exact match for patterns without
 /// wildcards, preserving case-insensitive exact-match behavior for existing
@@ -850,7 +909,8 @@ fn title_case_word(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        browser_payload_for_storage, is_ignored_app, matches_pattern, trackable_visible_windows,
+        apply_domain_group, browser_payload_for_storage, is_ignored_app, matches_pattern,
+        parse_domain_groups, trackable_visible_windows,
     };
     use crate::state::RuntimeConfigSnapshot;
     use crate::windows::VisibleWindowSnapshot;
@@ -875,6 +935,7 @@ mod tests {
             record_page_titles: true,
             ignored_apps: vec!["ignored.exe".to_string()],
             ignored_domains: Vec::new(),
+            domain_groups: Vec::new(),
         }
     }
 
@@ -952,9 +1013,80 @@ mod tests {
             record_page_titles: true,
             ignored_apps: vec!["*.exe".to_string(), "Cicada*".to_string()],
             ignored_domains: Vec::new(),
+            domain_groups: Vec::new(),
         };
         assert!(is_ignored_app(&config, "code.exe"));
         assert!(is_ignored_app(&config, "CicadaHelper.exe"));
         assert!(!is_ignored_app(&config, "unknown.bin"));
+    }
+
+    #[test]
+    fn parse_domain_groups_parses_valid_entries() {
+        let entries = vec![
+            "github = [github.com, gist.github.com, *.github.io]".to_string(),
+            "google = [mail.google.com, docs.google.com]".to_string(),
+        ];
+        let rules = parse_domain_groups(&entries);
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0].0, "github");
+        assert_eq!(
+            rules[0].1,
+            vec!["github.com", "gist.github.com", "*.github.io"]
+        );
+        assert_eq!(rules[1].0, "google");
+    }
+
+    #[test]
+    fn parse_domain_groups_skips_malformed() {
+        let entries = vec![
+            "no_equals_sign".to_string(),
+            " = [orphan.com]".to_string(),
+            "good = []".to_string(),
+            "ok = [ok.com]".to_string(),
+        ];
+        let rules = parse_domain_groups(&entries);
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].0, "ok");
+    }
+
+    #[test]
+    fn apply_domain_group_maps_matching_domain() {
+        let payload = common::BrowserEventPayload {
+            domain: "gist.github.com".to_string(),
+            page_title: None,
+            browser_window_id: 1,
+            tab_id: 2,
+            observed_at: None,
+        };
+        let groups = vec!["github = [github.com, gist.github.com, *.github.io]".to_string()];
+        let result = apply_domain_group(&payload, &groups);
+        assert_eq!(result.domain, "github");
+    }
+
+    #[test]
+    fn apply_domain_group_keeps_unmatched_domain() {
+        let payload = common::BrowserEventPayload {
+            domain: "example.com".to_string(),
+            page_title: None,
+            browser_window_id: 1,
+            tab_id: 2,
+            observed_at: None,
+        };
+        let groups = vec!["github = [github.com, gist.github.com]".to_string()];
+        let result = apply_domain_group(&payload, &groups);
+        assert_eq!(result.domain, "example.com");
+    }
+
+    #[test]
+    fn apply_domain_group_with_empty_config_is_noop() {
+        let payload = common::BrowserEventPayload {
+            domain: "github.com".to_string(),
+            page_title: None,
+            browser_window_id: 1,
+            tab_id: 2,
+            observed_at: None,
+        };
+        let result = apply_domain_group(&payload, &[]);
+        assert_eq!(result.domain, "github.com");
     }
 }

@@ -124,6 +124,21 @@ async function reportFocusedWindowTab(reason) {
     return
   }
 
+  // Skip reporting when the focused browser window is minimized — the user
+  // isn't looking at it, and the agent's foreground-visibility check would
+  // reject the event anyway. This avoids wasted requests and prevents
+  // stale-tab reporting during minimize transitions.
+  try {
+    const focusedWindow = await chrome.windows.get(focusedWindowId)
+    if (focusedWindow?.state === 'minimized') {
+      return
+    }
+  } catch {
+    // Window may have been closed between getLastFocused and get; treat as
+    // not focused and skip.
+    return
+  }
+
   const [currentTab] = await chrome.tabs.query({
     active: true,
     windowId: focusedWindowId,

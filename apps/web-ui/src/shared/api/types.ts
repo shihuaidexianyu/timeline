@@ -91,6 +91,7 @@ export type AgentSettingsResponse = {
   record_page_titles: boolean
   ignored_apps: string[]
   ignored_domains: string[]
+  domain_groups: string[]
   monitors: AgentMonitorStatus[]
 }
 
@@ -111,6 +112,7 @@ export type UpdateAgentConfigRequest = {
   record_page_titles: boolean
   ignored_apps: string[]
   ignored_domains: string[]
+  domain_groups: string[]
 }
 
 export type UpdateAgentConfigResponse = {

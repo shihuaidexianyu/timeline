@@ -1,6 +1,20 @@
 import type { AgentSettingsResponse, UpdateAgentConfigRequest } from '../../shared/api'
 import { clampNumber, parseConfigList } from '../../lib/dashboard-helpers'
 
+/// Like parseConfigList but only splits on newlines (not commas), since
+/// domain group entries contain commas inside `[...]` brackets.
+function parseLineSeparatedList(value: string): string[] {
+  const unique = new Set<string>()
+  value
+    .split('\n')
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .forEach((item) => {
+      unique.add(item)
+    })
+  return Array.from(unique)
+}
+
 export type SettingsFormValues = {
   idleThresholdSecs: number
   pollIntervalMillis: number
@@ -10,6 +24,7 @@ export type SettingsFormValues = {
   recordPageTitles: boolean
   ignoredAppsText: string
   ignoredDomainsText: string
+  domainGroupsText: string
 }
 
 export function settingsToFormValues(settings: AgentSettingsResponse): SettingsFormValues {
@@ -34,6 +49,9 @@ export function settingsToFormValues(settings: AgentSettingsResponse): SettingsF
     ignoredDomainsText: Array.isArray(settings.ignored_domains)
       ? settings.ignored_domains.join('\n')
       : '',
+    domainGroupsText: Array.isArray(settings.domain_groups)
+      ? settings.domain_groups.join('\n')
+      : '',
   }
 }
 
@@ -53,6 +71,7 @@ export function formValuesToUpdatePayload(
     record_page_titles: values.recordPageTitles,
     ignored_apps: parseConfigList(values.ignoredAppsText),
     ignored_domains: parseConfigList(values.ignoredDomainsText),
+    domain_groups: parseLineSeparatedList(values.domainGroupsText),
   }
 }
 
@@ -66,5 +85,6 @@ export function settingsFormKey(settings: AgentSettingsResponse) {
     settings.record_page_titles,
     settings.ignored_apps.join(','),
     settings.ignored_domains.join(','),
+    settings.domain_groups.join(','),
   ].join('|')
 }

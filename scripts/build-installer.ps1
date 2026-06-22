@@ -184,6 +184,7 @@ debug_events_enabled = false
 data_retention_days = 365
 ignored_apps = []
 ignored_domains = []
+domain_groups = []
 '@
 
 Set-Content -Path (Join-Path $configStage 'timeline.toml') -Value $defaultConfig -Encoding UTF8

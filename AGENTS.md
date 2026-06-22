@@ -340,6 +340,7 @@ npm run test:e2e  # E2E 测试
 - `log_retention_days` — 日志文件保留天数，0 表示永不清理
 - `debug_events_enabled` — 是否开启 `/api/debug/recent-events` 端点，默认关闭
 - `data_retention_days` — 原始 segment 保留天数，超过此天数的已关闭 segment 会在启动时被清理。设为 0 表示永不清理。默认 365 天。daily rollup 汇总表不受此限制，统计与日历数据不会丢失
+- `domain_groups` — 域名归组规则，格式 `"组名 = [域名1, 域名2, *.后缀]"`，统计时按归组名聚合
 - `ignored_apps` / `ignored_domains` — 忽略列表（支持 `*` 和 `?` 通配符）
 
 配置文件内的相对路径按“配置文件所在目录”解析。

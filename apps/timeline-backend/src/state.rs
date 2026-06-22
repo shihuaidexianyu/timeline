@@ -73,6 +73,7 @@ pub struct RuntimeConfigSnapshot {
     pub record_page_titles: bool,
     pub ignored_apps: Vec<String>,
     pub ignored_domains: Vec<String>,
+    pub domain_groups: Vec<String>,
 }
 
 impl RuntimeConfigSnapshot {
@@ -86,6 +87,7 @@ impl RuntimeConfigSnapshot {
             record_page_titles: config.record_page_titles,
             ignored_apps: config.ignored_apps.clone(),
             ignored_domains: config.ignored_domains.clone(),
+            domain_groups: config.domain_groups.clone(),
         }
     }
 }

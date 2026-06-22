@@ -7,6 +7,8 @@
 
 ## `focus_segments`
 
+记录经过 hwnd 级可见性校验的前台焦点窗口片段。裸前台句柄如果不可见、最小化、DWM cloaked、工具窗口、矩形无效，或被遮挡到自身可见比例不大于 5%，不会写入该表。该校验不使用可见窗口统计的 25% 屏幕占比阈值。
+
 - `process_name`
 - `display_name`
 - `exe_path`

@@ -161,7 +161,7 @@ pub fn capture_foreground_window(
         return Ok(None);
     }
 
-    if !unsafe { IsWindowVisible(hwnd).as_bool() } {
+    if !is_foreground_window_trackable(hwnd)? {
         return Ok(None);
     }
 
@@ -262,6 +262,50 @@ pub fn capture_visible_windows(include_window_title: bool) -> Result<Vec<Visible
     }
 
     Ok(snapshots)
+}
+
+fn is_foreground_window_trackable(hwnd: HWND) -> Result<bool> {
+    if is_workstation_locked()? {
+        return Ok(false);
+    }
+
+    if !is_visible_window_candidate(hwnd) {
+        return Ok(false);
+    }
+
+    let virtual_screen = virtual_screen_rect();
+    let Some(clipped_rect) = window_rect(hwnd).and_then(|rect| rect.intersect(virtual_screen))
+    else {
+        return Ok(false);
+    };
+
+    let mut covered_rects = Vec::new();
+    let mut found_foreground = false;
+    for candidate in enumerate_top_level_windows()? {
+        if candidate == hwnd {
+            found_foreground = true;
+            break;
+        }
+
+        if !is_visible_window_candidate(candidate) {
+            continue;
+        }
+        if let Some(cover_rect) =
+            window_rect(candidate).and_then(|rect| rect.intersect(virtual_screen))
+        {
+            covered_rects.push(cover_rect);
+        }
+    }
+
+    if !found_foreground {
+        return Ok(false);
+    }
+
+    let visible_area = visible_area_after_occlusion(clipped_rect, &covered_rects);
+    Ok(foreground_visible_ratio_is_trackable(
+        clipped_rect,
+        visible_area,
+    ))
 }
 
 pub fn detect_presence(idle_threshold: Duration) -> Result<PresenceState> {
@@ -425,6 +469,15 @@ fn dominant_monitor_for_window(
         })
         .max_by_key(|(_, overlap_area)| *overlap_area)
         .map(|(monitor_rect, _)| monitor_rect)
+}
+
+fn foreground_visible_ratio_is_trackable(clipped_rect: ScreenRect, visible_area: i64) -> bool {
+    let total_area = clipped_rect.area();
+    if total_area <= 0 || visible_area <= 0 {
+        return false;
+    }
+
+    visible_area as f64 / total_area as f64 > VISIBLE_WINDOW_MIN_RATIO
 }
 
 fn visible_area_after_occlusion(rect: ScreenRect, covered_rects: &[ScreenRect]) -> i64 {
@@ -676,8 +729,8 @@ fn is_browser_process(process_name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        ProcessInfoCache, ScreenRect, is_large_enough_visible_window, session_lock_state,
-        visible_area_after_occlusion,
+        ProcessInfoCache, ScreenRect, foreground_visible_ratio_is_trackable,
+        is_large_enough_visible_window, session_lock_state, visible_area_after_occlusion,
     };
     use std::collections::BTreeMap;
 
@@ -748,6 +801,21 @@ mod tests {
             5_000,
             &[left_monitor, right_monitor]
         ));
+    }
+
+    #[test]
+    fn foreground_filter_accepts_small_visible_dialogs() {
+        let dialog = rect(0, 0, 20, 20);
+
+        assert!(foreground_visible_ratio_is_trackable(dialog, dialog.area()));
+    }
+
+    #[test]
+    fn foreground_filter_rejects_mostly_occluded_windows() {
+        let window = rect(0, 0, 100, 100);
+        let visible_area = 500;
+
+        assert!(!foreground_visible_ratio_is_trackable(window, visible_area));
     }
 
     #[test]

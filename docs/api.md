@@ -35,7 +35,7 @@
 
 字段说明：
 
-- `focus_segments`：前台焦点窗口片段，适合精查传统“当前窗口”时间线
+- `focus_segments`：经过 hwnd 级可见性校验的前台焦点窗口片段；要求 foreground hwnd 在当前桌面真实可见，但不要求占据所在屏幕 25%
 - `visible_window_segments`：当前输入桌面实际露出的窗口片段；窗口自身可见比例需大于 5%，且实际露出面积至少占所在显示器面积的 25%
 - `browser_segments`：浏览器扩展上报的前台标签页域名片段
 - `presence_segments`：设备状态片段，状态为 `active` / `idle` / `locked`
@@ -52,7 +52,7 @@
 口径说明：
 
 - `visible_window`：按当前输入桌面中实际露出的可见窗口累计；窗口自身可见比例需大于 5%，且实际露出面积至少占所在显示器面积的 25%。同一时间多个窗口可并行计时，因此总和可能超过活跃时长
-- `focus`：按传统前台焦点窗口累计，同一时刻只有一个前台应用计时
+- `focus`：按经过可见性校验的前台焦点窗口累计，同一时刻只有一个前台应用计时；该口径不使用 25% 屏幕占比阈值
 
 ## `GET /api/stats/apps/trend?date=2026-03-21&period=week&limit=6&metric=visible_window`
 

@@ -11,7 +11,7 @@
 
 ## 核心数据流
 
-1. Windows 轮询当前前台窗口，生成窗口快照
+1. Windows 轮询当前前台窗口，并通过当前输入桌面的可见性规则校验 foreground hwnd 后生成窗口快照
 2. 快照变化时结束上一条 `focus_segment`，再创建新段
 3. Windows 枚举当前输入桌面的顶层窗口，扣除上层窗口遮挡面积后生成 `visible_window_segment`
 4. Windows 输入状态轮询产生 `presence_segment`
@@ -25,6 +25,8 @@
 ### focus_segments
 
 - 启动时先读取一次当前前台窗口
+- 只有 foreground hwnd 同时满足当前桌面可见窗口候选条件时才计入：非最小化、未 cloaked、非工具窗口、矩形有效，且扣除上层遮挡后的自身可见比例大于 5%
+- 前台焦点校验不使用 25% 屏幕占比阈值，小弹窗、文件选择器等真实焦点窗口仍可计入
 - 当窗口指纹变化时结束旧段、创建新段
 - 指纹默认由 `hwnd + process_id + window_title` 组成；当关闭窗口标题记录时，采集器不读取标题，指纹退化为 `hwnd + process_id`
 - 相同前台窗口连续轮询不会重复建段

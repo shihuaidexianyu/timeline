@@ -590,11 +590,20 @@ async fn maybe_emit_health_reminder(
                     if !fullscreen {
                         should_notify = true;
                         streak_secs = elapsed;
-                        // Next reminder at 1.5x the current trigger point, capped
-                        // at 4x the base threshold so very long sessions don't
-                        // escalate unreasonably.
-                        let next = (next_threshold * 3 / 2).min(threshold_secs * 4);
+                        // Next reminder at 1.5x the base threshold, measured from
+                        // NOW (not from the last trigger). This prevents repeated
+                        // toasts on every poll cycle: the next trigger is at
+                        // elapsed + 1.5*threshold, not at a fixed multiple of the
+                        // original threshold (which elapsed would immediately
+                        // exceed again). Capped at 4x the base threshold.
+                        let gap = (threshold_secs * 3 / 2).min(threshold_secs * 4);
+                        let next = elapsed + gap;
                         reminder.next_reminder_threshold_secs = Some(next);
+                    } else {
+                        // Fullscreen: defer but still advance the threshold so we
+                        // don't re-check on every single poll. Re-check after a
+                        // short gap (30s) in case the user exits fullscreen soon.
+                        reminder.next_reminder_threshold_secs = Some(elapsed + 30);
                     }
                 }
             }

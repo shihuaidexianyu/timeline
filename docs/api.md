@@ -79,6 +79,16 @@
 
 按域名聚合当天总时长。
 
+## `GET /api/stats/domains/trend?date=2026-03-21&period=week&limit=6`
+
+返回以指定日期为锚点的域名使用趋势，用于周/月折线图。结构与 `/api/stats/apps/trend` 相同，但按 `daily_domain_usage` 表聚合域名维度数据。
+
+查询参数：
+
+- `date`：锚点日期，格式为 `YYYY-MM-DD`
+- `period`：`week` 或 `month`，省略时为 `week`
+- `limit`：返回前 N 个域名，当前后端会限制在 `1..=12`
+
 ## `GET /api/stats/focus?date=2026-03-21`
 
 返回专注总时长、真实使用时间、切换次数、最长专注块和平均专注块。
@@ -112,7 +122,16 @@
 
 ## `GET /api/debug/recent-events`
 
-读取最近的原始事件，仅用于本地调试。
+读取最近的原始事件，仅用于本地调试。该端点默认不注册，需在配置中设置 `debug_events_enabled = true` 才会启用。
+
+## `GET /api/export?date=2026-03-21&format=csv`
+
+导出某一天的全部 segment 数据。`format` 支持 `csv` 或 `json`，省略时默认 `csv`。
+
+- `csv`：返回 `text/csv`，包含 `type,started_at,ended_at,process_name,display_name,domain,state,hwnd,process_id,window_title` 列，每行一个 segment（focus / browser / presence / visible_window）
+- `json`：返回 `application/json`，结构同 `/api/timeline/day`
+
+响应头包含 `Content-Disposition: attachment; filename="timeline-YYYY-MM-DD.csv"` 以触发浏览器下载。
 
 ## `GET /api/settings`
 

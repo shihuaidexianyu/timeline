@@ -158,7 +158,7 @@ npm run dev
 
 1. **Focus Tracker:** 每秒轮询 Windows 前台窗口（`GetForegroundWindow`），窗口指纹（`hwnd + process_id`）变化时结束旧 `focus_segment` 并创建新段。窗口标题不参与指纹计算，避免 IDE 切文件、浏览器切标签等标题变化将连续焦点误切成碎片段。标题仍作为段元数据记录。
 2. **Presence Tracker:** 每秒检测用户输入 idle 时长与工作站锁定状态，生成 `presence_segment`（状态：`active` / `idle` / `locked`）。`locked` 优先级高于 `idle`。
-3. **Visible Window Tracker:** 每秒枚举当前输入桌面的顶层窗口，排除最小化、不可见、DWM cloaked、工具窗口、空矩形窗口和忽略应用，按 z-order 扣除遮挡面积；可见面积比例大于 5% 的窗口写入 `visible_window_segments`，并增量维护 `daily_visible_app_usage`。锁屏会关闭当前可见窗口段；idle 不会停止计时。
+3. **Visible Window Tracker:** 每秒枚举当前输入桌面的顶层窗口，排除最小化、不可见、DWM cloaked、工具窗口、空矩形窗口和忽略应用，按 z-order 扣除遮挡面积；可见面积比例大于 5% 的窗口写入 `visible_window_segments`，并增量维护 `daily_visible_app_usage`。锁屏或 idle 时关闭当前可见窗口段，用户回到 active 后重新开始计时。这保证可见窗口总时长 ≤ 活跃总时长，语义自洽。
 4. **Browser Bridge:** 扩展仅在“当前聚焦的浏览器窗口”有活动标签页时，向 `/api/events/browser` 上报域名事件；后端仅在确认前台为浏览器时维护 `browser_segment`。相同 `domain + browser_window_id + tab_id` 连续事件会合并。
 5. **Web UI:** 通过日期查询 `focus_segments`、`browser_segments`、`presence_segments` 和应用预聚合数据，并渲染时间线与统计图表。统计页应用趋势/应用分布默认使用可见窗口口径，可切换到前台焦点口径。
 
@@ -187,9 +187,11 @@ CORS 限制：浏览器请求 Origin 必须是后端自身地址（由 `listen_a
 - `GET /api/stats/apps?date=YYYY-MM-DD&metric=visible_window|focus`
 - `GET /api/stats/apps/trend?date=YYYY-MM-DD&period=week|month&metric=visible_window|focus`
 - `GET /api/stats/domains?date=YYYY-MM-DD`
+- `GET /api/stats/domains/trend?date=YYYY-MM-DD&period=week|month`
 - `GET /api/stats/focus?date=YYYY-MM-DD`
 - `GET /api/stats/summary?date=YYYY-MM-DD`
 - `GET /api/calendar/month?month=YYYY-MM`
+- `GET /api/export?date=YYYY-MM-DD&format=csv|json`
 - `GET /api/debug/recent-events`（需 `debug_events_enabled = true`，默认关闭）
 - `GET /api/settings`
 - `POST /api/settings/config`
@@ -337,7 +339,8 @@ npm run test:e2e  # E2E 测试
 - `log_dir` — 日志文件目录（相对路径按配置文件所在目录解析）
 - `log_retention_days` — 日志文件保留天数，0 表示永不清理
 - `debug_events_enabled` — 是否开启 `/api/debug/recent-events` 端点，默认关闭
-- `ignored_apps` / `ignored_domains` — 忽略列表
+- `data_retention_days` — 原始 segment 保留天数，超过此天数的已关闭 segment 会在启动时被清理。设为 0 表示永不清理。默认 365 天。daily rollup 汇总表不受此限制，统计与日历数据不会丢失
+- `ignored_apps` / `ignored_domains` — 忽略列表（支持 `*` 和 `?` 通配符）
 
 配置文件内的相对路径按“配置文件所在目录”解析。
 

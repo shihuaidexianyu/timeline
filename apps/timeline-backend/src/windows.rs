@@ -960,6 +960,17 @@ mod tests {
             Some(r"C:\Program Files\App\weixin.exe")
         );
     }
+
+    #[test]
+    fn media_player_detection_recognizes_known_players() {
+        use super::is_media_player_process;
+        assert!(is_media_player_process("vlc.exe"));
+        assert!(is_media_player_process("VLC.EXE"));
+        assert!(is_media_player_process("PotPlayerMini64.exe"));
+        assert!(is_media_player_process("spotify.exe"));
+        assert!(!is_media_player_process("code.exe"));
+        assert!(!is_media_player_process("msedge.exe"));
+    }
 }
 
 /// RAII wrapper that closes a Win32 HANDLE on drop.

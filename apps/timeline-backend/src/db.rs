@@ -2980,4 +2980,86 @@ VALUES ('legacy.exe', 'Legacy App', NULL, NULL, 0, ?, ?, ?, ?)
     fn temp_lock_path(database_path: &std::path::Path) -> PathBuf {
         database_path.with_extension("lock")
     }
+
+    #[tokio::test]
+    async fn prune_old_segments_deletes_closed_segments_beyond_retention() {
+        let (store, database_path) = temp_store().await;
+
+        // Insert a segment that ended 10 days ago.
+        let old_start = parse_time("2026-01-01T00:00:00Z").expect("old start");
+        let old_end = parse_time("2026-01-01T01:00:00Z").expect("old end");
+        let app = AppInfo {
+            process_name: "old.exe".to_string(),
+            display_name: "Old".to_string(),
+            exe_path: None,
+            window_title: None,
+            is_browser: false,
+        };
+        let old_id = store
+            .start_focus_segment(&app, old_start)
+            .await
+            .expect("start old");
+        store
+            .end_focus_segment(old_id, old_end)
+            .await
+            .expect("end old");
+
+        // Insert a segment that is still open (should NOT be pruned).
+        let recent_start = OffsetDateTime::now_utc() - Duration::minutes(5);
+        let _recent_id = store
+            .start_focus_segment(&app, recent_start)
+            .await
+            .expect("start recent");
+
+        // Prune anything older than 5 days. The old segment (10 days ago) should
+        // be deleted; the open recent segment should remain.
+        let deleted = store.prune_old_segments(5).await.expect("prune");
+        assert!(deleted >= 1, "expected at least 1 row deleted");
+
+        // Verify the open segment still exists.
+        let row =
+            sqlx::query("SELECT COUNT(*) as count FROM focus_segments WHERE ended_at IS NULL")
+                .fetch_one(&store.pool)
+                .await
+                .expect("count open");
+        let count: i64 = row.get("count");
+        assert_eq!(count, 1, "open segment should not be pruned");
+
+        // Verify the old closed segment is gone.
+        let row =
+            sqlx::query("SELECT COUNT(*) as count FROM focus_segments WHERE ended_at IS NOT NULL")
+                .fetch_one(&store.pool)
+                .await
+                .expect("count closed");
+        let count: i64 = row.get("count");
+        assert_eq!(count, 0, "old closed segment should be pruned");
+
+        let _ = std::fs::remove_file(database_path);
+    }
+
+    #[tokio::test]
+    async fn prune_old_segments_with_zero_retention_does_nothing() {
+        let (store, database_path) = temp_store().await;
+
+        let app = AppInfo {
+            process_name: "test.exe".to_string(),
+            display_name: "Test".to_string(),
+            exe_path: None,
+            window_title: None,
+            is_browser: false,
+        };
+        let id = store
+            .start_focus_segment(&app, OffsetDateTime::now_utc() - Duration::days(100))
+            .await
+            .expect("start");
+        store
+            .end_focus_segment(id, OffsetDateTime::now_utc() - Duration::days(99))
+            .await
+            .expect("end");
+
+        let deleted = store.prune_old_segments(0).await.expect("prune");
+        assert_eq!(deleted, 0, "retention=0 should not prune anything");
+
+        let _ = std::fs::remove_file(database_path);
+    }
 }

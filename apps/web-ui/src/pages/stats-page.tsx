@@ -43,12 +43,6 @@ const LazyCompactDonutChart = lazy(() =>
     })),
 )
 
-const LazyDayUsageView = lazy(() =>
-    import('../components/day-usage-view').then((module) => ({
-        default: module.DayUsageView,
-    })),
-)
-
 export function StatsPage(props: {
     shared: SharedData
     appUsageMetric: UsageMetric
@@ -198,25 +192,6 @@ export function StatsPage(props: {
                                 filter={props.domainFilter}
                                 filterKind="domain"
                                 onSelect={props.setDomainFilter}
-                            />
-                        </Suspense>
-                    </ErrorBoundary>
-                </div>
-
-                <div className="panel page-panel stats-analysis-card">
-                    <div className="panel-header">
-                        <div>
-                            <h2>日内分布</h2>
-                        </div>
-                        <RefreshBadge active={shared.isTimelineRefreshing} />
-                    </div>
-                    <ErrorBoundary>
-                        <Suspense fallback={<ChartLazyFallback variant="day" />}>
-                            <LazyDayUsageView
-                                dashboard={dashboard}
-                                metric={appUsageMetric}
-                                selectedDate={selectedDate}
-                                loading={loading || shared.isTimelineRefreshing}
                             />
                         </Suspense>
                     </ErrorBoundary>

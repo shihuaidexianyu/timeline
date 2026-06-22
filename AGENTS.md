@@ -156,7 +156,7 @@ npm run dev
 
 ## 核心数据流
 
-1. **Focus Tracker:** 每秒轮询 Windows 前台窗口（`GetForegroundWindow`），窗口指纹（`hwnd + process_id + window_title`）变化时结束旧 `focus_segment` 并创建新段。关闭窗口标题记录时，指纹退化为 `hwnd + process_id`。
+1. **Focus Tracker:** 每秒轮询 Windows 前台窗口（`GetForegroundWindow`），窗口指纹（`hwnd + process_id`）变化时结束旧 `focus_segment` 并创建新段。窗口标题不参与指纹计算，避免 IDE 切文件、浏览器切标签等标题变化将连续焦点误切成碎片段。标题仍作为段元数据记录。
 2. **Presence Tracker:** 每秒检测用户输入 idle 时长与工作站锁定状态，生成 `presence_segment`（状态：`active` / `idle` / `locked`）。`locked` 优先级高于 `idle`。
 3. **Visible Window Tracker:** 每秒枚举当前输入桌面的顶层窗口，排除最小化、不可见、DWM cloaked、工具窗口、空矩形窗口和忽略应用，按 z-order 扣除遮挡面积；可见面积比例大于 5% 的窗口写入 `visible_window_segments`，并增量维护 `daily_visible_app_usage`。锁屏会关闭当前可见窗口段；idle 不会停止计时。
 4. **Browser Bridge:** 扩展仅在“当前聚焦的浏览器窗口”有活动标签页时，向 `/api/events/browser` 上报域名事件；后端仅在确认前台为浏览器时维护 `browser_segment`。相同 `domain + browser_window_id + tab_id` 连续事件会合并。

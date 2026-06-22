@@ -83,10 +83,48 @@ async fn run_focus_tracker(state: AgentState) -> Result<()> {
 
 async fn run_visible_window_tracker(state: AgentState) -> Result<()> {
     let mut shutdown_rx = state.shutdown_rx();
+    let mut was_idle_or_locked = false;
     loop {
         let runtime_config = state.runtime_config_snapshot().await;
         let observed_at = OffsetDateTime::now_utc();
         state.mark_visible_windows_online(observed_at).await;
+
+        // Check presence state. When the user goes idle or locks the
+        // workstation, we close all open visible-window segments so their
+        // timing stops. This keeps "visible window total" ≤ "active total"
+        // and avoids counting time the user wasn't actually present.
+        let presence =
+            match detect_presence(Duration::from_secs(runtime_config.idle_threshold_secs)) {
+                Ok(value) => value,
+                Err(error) => {
+                    warn!(?error, "failed to read presence in visible window tracker");
+                    sleep(Duration::from_millis(runtime_config.poll_interval_millis)).await;
+                    continue;
+                }
+            };
+
+        let is_idle_or_locked = matches!(presence, PresenceState::Idle | PresenceState::Locked);
+
+        if is_idle_or_locked {
+            // Close all open visible-window segments once per idle/locked
+            // transition; subsequent polls while still idle/locked find no
+            // open segments and do nothing.
+            if !was_idle_or_locked
+                && let Err(error) = close_all_open_visible_windows(&state, observed_at).await
+            {
+                warn!(?error, "failed to close visible windows on idle");
+            }
+            was_idle_or_locked = true;
+
+            if is_shutting_down(&mut shutdown_rx).await {
+                break;
+            }
+            sleep(Duration::from_millis(runtime_config.poll_interval_millis)).await;
+            continue;
+        }
+
+        // Active again — resume normal tracking.
+        was_idle_or_locked = false;
 
         // Visible-window stats are app-level. Reading titles for every visible
         // top-level window can block on a non-responsive window, so leave titles
@@ -185,22 +223,34 @@ async fn close_open_focus_and_browser_segments(state: &AgentState) {
 }
 
 async fn close_open_visible_window_segments(state: &AgentState) {
-    let observed_at = OffsetDateTime::now_utc();
+    if let Err(error) = close_all_open_visible_windows(state, OffsetDateTime::now_utc()).await {
+        warn!(
+            ?error,
+            "failed to close visible window segments on shutdown"
+        );
+    }
+}
+
+/// Closes every currently-open visible-window segment. Used both on graceful
+/// shutdown and when the user goes idle/locked — visible-window timing should
+/// not accumulate while the user is away.
+async fn close_all_open_visible_windows(
+    state: &AgentState,
+    observed_at: OffsetDateTime,
+) -> Result<()> {
     let open_windows: Vec<OpenVisibleWindowSegment> = {
         let runtime = state.runtime().await;
         runtime.current_visible_windows.values().cloned().collect()
     };
     for window in &open_windows {
-        if let Err(error) = state
+        state
             .store()
             .end_visible_window_segment(window.id, observed_at)
-            .await
-        {
-            warn!(?error, "failed to close visible window segment on shutdown");
-        }
+            .await?;
     }
     let mut runtime = state.runtime().await;
     runtime.current_visible_windows.clear();
+    Ok(())
 }
 
 async fn close_open_presence_segment(state: &AgentState) {

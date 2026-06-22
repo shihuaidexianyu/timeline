@@ -13,7 +13,7 @@ import {
     niceWeeklyAxisMax,
     sumSlices,
 } from '../features/stats/stats-selectors'
-import { ErrorBoundary, RefreshBadge } from '../shared/ui'
+import { ErrorBoundary, ErrorCard, RefreshBadge } from '../shared/ui'
 import {
     formatDuration,
     presenceColor,
@@ -33,6 +33,12 @@ const LazyDonutChart = lazy(() =>
 const LazyCompactDonutChart = lazy(() =>
     import('../components/donut-chart').then((module) => ({
         default: module.CompactDonutChart,
+    })),
+)
+
+const LazyDayUsageView = lazy(() =>
+    import('../components/day-usage-view').then((module) => ({
+        default: module.DayUsageView,
     })),
 )
 
@@ -58,6 +64,8 @@ export function StatsPage(props: {
     isAppStatsRefreshing: boolean
     isCalendarRefreshing: boolean
     appStatsError: string | null
+    onRetryAppStats?: () => void
+    onRetryCalendar?: () => void
     onCalendarMonthChange: (month: string) => void
     onSelectDate: (date: string) => void
 }) {
@@ -126,7 +134,11 @@ export function StatsPage(props: {
                             : '按前台焦点窗口累计，同一时刻只累计一个应用。'}
                     </p>
                     {props.appStatsError && props.appStats.length === 0 ? (
-                        <div className="state-card error-card">{props.appStatsError}</div>
+                        <ErrorCard
+                            message={props.appStatsError}
+                            onRetry={props.onRetryAppStats}
+                            retrying={props.isAppStatsRefreshing}
+                        />
                     ) : (
                         <ErrorBoundary>
                             <Suspense fallback={<ChartLazyFallback variant="donut" />}>
@@ -166,6 +178,25 @@ export function StatsPage(props: {
                     </ErrorBoundary>
                 </div>
 
+                <div className="panel page-panel stats-analysis-card">
+                    <div className="panel-header">
+                        <div>
+                            <h2>日内分布</h2>
+                        </div>
+                        <RefreshBadge active={props.isTimelineRefreshing} />
+                    </div>
+                    <ErrorBoundary>
+                        <Suspense fallback={<ChartLazyFallback variant="day" />}>
+                            <LazyDayUsageView
+                                dashboard={props.dashboard}
+                                metric={props.appUsageMetric}
+                                selectedDate={props.selectedDate}
+                                loading={props.loading || props.isTimelineRefreshing}
+                            />
+                        </Suspense>
+                    </ErrorBoundary>
+                </div>
+
                 <div className="panel page-panel stats-calendar-card">
                     <div className="panel-header">
                         <div>
@@ -184,7 +215,11 @@ export function StatsPage(props: {
                             onMonthChange={props.onCalendarMonthChange}
                         />
                     ) : props.calendarError ? (
-                        <div className="state-card error-card">{props.calendarError}</div>
+                        <ErrorCard
+                            message={props.calendarError}
+                            onRetry={props.onRetryCalendar}
+                            retrying={props.isCalendarRefreshing}
+                        />
                     ) : (
                         <div className="state-card">加载中…</div>
                     )}

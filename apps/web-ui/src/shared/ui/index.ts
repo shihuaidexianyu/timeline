@@ -1,6 +1,7 @@
 export * from './Button'
 export * from './EmptyState'
 export * from './ErrorBoundary'
+export * from './ErrorCard'
 export * from './Panel'
 export * from './RefreshBadge'
 export * from './SegmentedControl'

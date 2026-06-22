@@ -143,13 +143,16 @@ impl ScreenRect {
 }
 
 impl ForegroundWindowSnapshot {
+    /// Fingerprint used to decide whether the foreground focus segment should
+    /// be touched (same window) or replaced (different window).
+    ///
+    /// Uses `hwnd:process_id` only — NOT `window_title`. This prevents
+    /// dynamic title changes (e.g. switching files in VS Code, switching
+    /// browser tabs) from fragmenting a single focus session into many
+    /// tiny segments. The window title is still captured and stored as
+    /// segment metadata; it just doesn't trigger segment switches.
     pub fn fingerprint(&self) -> String {
-        format!(
-            "{}:{}:{}",
-            self.hwnd,
-            self.process_id,
-            self.window_title.as_deref().unwrap_or_default()
-        )
+        format!("{}:{}", self.hwnd, self.process_id)
     }
 }
 
@@ -314,11 +317,67 @@ pub fn detect_presence(idle_threshold: Duration) -> Result<PresenceState> {
     }
 
     let idle_for = read_idle_duration()?;
-    if idle_for >= idle_threshold {
+
+    // When the foreground window is a known media player or a fullscreen
+    // browser (likely playing video), the user may not move the mouse for a
+    // long time even though they are actively watching. In that case we widen
+    // the idle threshold to 30 minutes so video playback isn't miscounted as
+    // idle. This is a heuristic — it can't detect audio-only playback or
+    // non-fullscreen video — but it catches the most common false-positive.
+    let effective_threshold = if is_foreground_media_or_fullscreen_browser()? {
+        idle_threshold.max(Duration::from_secs(30 * 60))
+    } else {
+        idle_threshold
+    };
+
+    if idle_for >= effective_threshold {
         Ok(PresenceState::Idle)
     } else {
         Ok(PresenceState::Active)
     }
+}
+
+/// Returns true if the current foreground window is a known media player
+/// process OR a browser window in fullscreen mode (likely playing video).
+fn is_foreground_media_or_fullscreen_browser() -> Result<bool> {
+    let snapshot = match capture_foreground_window(false)? {
+        Some(snapshot) => snapshot,
+        None => return Ok(false),
+    };
+
+    if is_media_player_process(&snapshot.process_name) {
+        return Ok(true);
+    }
+
+    // Browser in fullscreen — likely video playback or presentation.
+    // We already suppress health reminders in fullscreen; here we also
+    // relax idle detection for the same condition.
+    if snapshot.is_browser && is_foreground_fullscreen()? {
+        return Ok(true);
+    }
+
+    Ok(false)
+}
+
+/// Known media player process names. The user is likely watching content
+/// and not moving the mouse, so idle detection should be relaxed.
+fn is_media_player_process(process_name: &str) -> bool {
+    matches!(
+        process_name.to_ascii_lowercase().as_str(),
+        "vlc.exe"
+            | "mpc-hc64.exe"
+            | "mpc-hc.exe"
+            | "potplayermini64.exe"
+            | "potplayermini.exe"
+            | "mpv.exe"
+            | "wmplayer.exe"
+            | "foobar2000.exe"
+            | "spotify.exe"
+            | "music.exe"
+            | "qqmusic.exe"
+            | "cloudmusic.exe"
+            | "kugou.exe"
+    )
 }
 
 /// Checks if the current foreground window covers the entire area of its

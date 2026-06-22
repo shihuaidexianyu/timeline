@@ -1,20 +1,13 @@
 import { lazy, Suspense } from 'react'
 import { ChartLazyFallback } from '../components/chart-lazy-fallback'
-import { ErrorBoundary, RefreshBadge } from '../shared/ui'
+import { ErrorBoundary, ErrorCard, RefreshBadge } from '../shared/ui'
 import type {
   AppUsageTrendResponse,
   TrendPeriod,
   UsageMetric,
 } from '../shared/api'
-import type { DashboardModel } from '../lib/chart-model'
 
-export type AppTrendView = 'day' | TrendPeriod
-
-const LazyDayUsageView = lazy(() =>
-  import('../components/day-usage-view').then((module) => ({
-    default: module.DayUsageView,
-  })),
-)
+export type AppTrendView = TrendPeriod
 
 const LazyAppUsageTrendChart = lazy(() =>
   import('../components/app-usage-trend-chart').then((module) => ({
@@ -23,7 +16,6 @@ const LazyAppUsageTrendChart = lazy(() =>
 )
 
 export function UsagePage(props: {
-  dashboard: DashboardModel | null
   loading: boolean
   selectedDate: string
   appUsageMetric: UsageMetric
@@ -32,11 +24,11 @@ export function UsagePage(props: {
   setAppTrendView: (value: AppTrendView) => void
   appTrend: AppUsageTrendResponse | null
   appTrendError: string | null
-  isTimelineRefreshing: boolean
+  onRetryTrend?: () => void
   isAppTrendRefreshing: boolean
 }) {
   const { appTrendView, setAppTrendView } = props
-  const showTrendError = appTrendView !== 'day' && props.appTrendError && !props.appTrend
+  const showTrendError = props.appTrendError && !props.appTrend
   const sourceLabel = props.appUsageMetric === 'visible_window' ? '可见窗口' : '前台焦点'
   const metricNote =
     props.appUsageMetric === 'visible_window'
@@ -52,25 +44,12 @@ export function UsagePage(props: {
             <h2>使用趋势</h2>
           </div>
           <div className="usage-trend-actions">
-            <RefreshBadge
-              active={
-                appTrendView === 'day'
-                  ? props.isTimelineRefreshing
-                  : props.isAppTrendRefreshing
-              }
-            />
+            <RefreshBadge active={props.isAppTrendRefreshing} />
             <MetricSwitch
               value={props.appUsageMetric}
               onChange={props.setAppUsageMetric}
             />
             <div className="ui-segmented" aria-label="应用趋势范围">
-              <button
-                type="button"
-                className={appTrendView === 'day' ? 'is-active' : ''}
-                onClick={() => setAppTrendView('day')}
-              >
-                日内
-              </button>
               <button
                 type="button"
                 className={appTrendView === 'week' ? 'is-active' : ''}
@@ -92,31 +71,20 @@ export function UsagePage(props: {
         <p className="stats-metric-note">{metricNote}</p>
 
         {showTrendError ? (
-          <div className="state-card error-card">{props.appTrendError}</div>
+          <ErrorCard
+            message={props.appTrendError ?? ''}
+            onRetry={props.onRetryTrend}
+            retrying={props.isAppTrendRefreshing}
+          />
         ) : (
-          <>
-            {appTrendView === 'day' ? (
-              <ErrorBoundary>
-                <Suspense fallback={<ChartLazyFallback variant="day" />}>
-                  <LazyDayUsageView
-                    dashboard={props.dashboard}
-                    metric={props.appUsageMetric}
-                    selectedDate={props.selectedDate}
-                    loading={props.loading || props.isTimelineRefreshing}
-                  />
-                </Suspense>
-              </ErrorBoundary>
-            ) : (
-              <ErrorBoundary>
-                <Suspense fallback={<ChartLazyFallback variant="trend" />}>
-                  <LazyAppUsageTrendChart
-                    trend={props.appTrend}
-                    loading={props.loading || (props.isAppTrendRefreshing && !props.appTrend)}
-                  />
-                </Suspense>
-              </ErrorBoundary>
-            )}
-          </>
+          <ErrorBoundary>
+            <Suspense fallback={<ChartLazyFallback variant="trend" />}>
+              <LazyAppUsageTrendChart
+                trend={props.appTrend}
+                loading={props.loading || (props.isAppTrendRefreshing && !props.appTrend)}
+              />
+            </Suspense>
+          </ErrorBoundary>
         )}
       </div>
     </section>

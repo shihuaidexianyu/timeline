@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AppShell } from './AppShell'
-import { useHashRoute } from './page-route'
+import { useHashQueryParam, useHashRoute } from './page-route'
 import { useSelectedDateState } from './use-selected-date-state'
 import {
   useAgentSettingsQuery,
@@ -36,14 +36,18 @@ export function AppController() {
   const [settingsNotice, setSettingsNotice] = useState<string | null>(null)
   const [appFilter, setAppFilter] = useState<DashboardFilter>(null)
   const [domainFilter, setDomainFilter] = useState<DashboardFilter>(null)
-  const [appUsageMetric, setAppUsageMetric] =
-    useState<UsageMetric>('visible_window')
-  const [appTrendView, setAppTrendView] = useState<AppTrendView>('day')
+  const [urlMetric, setUrlMetric] = useHashQueryParam('metric')
+  const appUsageMetric: UsageMetric =
+    urlMetric === 'focus' || urlMetric === 'visible_window' ? urlMetric : 'visible_window'
+  const setAppUsageMetric = (value: UsageMetric) => setUrlMetric(value)
+  const [appTrendView, setAppTrendView] = useState<AppTrendView>('week')
 
   const timelineQuery = useTimelineDayQuery(null)
   const timeline = timelineQuery.data ?? null
   const periodQuery = usePeriodSummaryQuery(timeline?.date ?? null)
-  const settingsQuery = useAgentSettingsQuery()
+  const settingsQuery = useAgentSettingsQuery({
+    enabled: page === 'settings',
+  })
   const agentToday = periodQuery.data?.date ?? null
   const agentTimezone = timeline?.timezone ?? null
   const dateState = useSelectedDateState({ agentToday, agentTimezone })
@@ -65,15 +69,17 @@ export function AppController() {
     ? selectedPeriodQuery.data ??
       (dateState.selectedDate === periodQuery.data?.date ? periodQuery.data : undefined)
     : periodQuery.data
-  const calendarQuery = useMonthCalendarQuery(dateState.calendarMonth)
+  const calendarQuery = useMonthCalendarQuery(dateState.calendarMonth, {
+    enabled: page === 'stats',
+  })
   const appTrendDate = dateState.selectedDate ?? timeline?.date ?? null
   const appTrendQuery = useAppUsageTrendQuery(
     appTrendDate,
-    appTrendView === 'day' ? 'week' : appTrendView,
+    appTrendView,
     appUsageMetric,
     6,
     {
-      enabled: page === 'usage' && appTrendView !== 'day' && appTrendDate !== null,
+      enabled: page === 'usage' && appTrendDate !== null,
     },
   )
   const appStatsQuery = useAppStatsQuery(appTrendDate, appUsageMetric, {
@@ -204,6 +210,8 @@ export function AppController() {
               isAppStatsRefreshing={appStatsQuery.isFetching}
               isCalendarRefreshing={calendarQuery.isFetching}
               appStatsError={errorToNullableMessage(appStatsQuery.error)}
+              onRetryAppStats={() => { void appStatsQuery.refetch() }}
+              onRetryCalendar={() => { void calendarQuery.refetch() }}
               onCalendarMonthChange={selectCalendarMonth}
               onSelectDate={selectDate}
             />
@@ -211,7 +219,6 @@ export function AppController() {
 
           {page === 'usage' ? (
             <UsagePage
-              dashboard={dashboard}
               loading={!hasDashboard}
               selectedDate={resolvedSelectedDate}
               appUsageMetric={appUsageMetric}
@@ -220,10 +227,7 @@ export function AppController() {
               setAppTrendView={setAppTrendView}
               appTrend={appTrendQuery.data ?? null}
               appTrendError={errorToNullableMessage(appTrendQuery.error)}
-              isTimelineRefreshing={
-                (timelineQuery.isFetching || selectedTimelineQuery.isFetching) &&
-                hasDashboard
-              }
+              onRetryTrend={() => { void appTrendQuery.refetch() }}
               isAppTrendRefreshing={appTrendQuery.isFetching}
             />
           ) : null}

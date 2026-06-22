@@ -974,14 +974,39 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         let mut domain_buckets: BTreeMap<(String, String), RollupBucket> = BTreeMap::new();
         let mut presence_buckets: BTreeMap<(String, String), RollupBucket> = BTreeMap::new();
 
-        let focus_rows = sqlx::query(
-            r#"
+        // Fetch all four segment tables in parallel. Each table is independent
+        // and SQLite WAL mode allows concurrent reads without blocking.
+        let (focus_rows, visible_rows, browser_rows, presence_rows) = tokio::try_join!(
+            sqlx::query(
+                r#"
 SELECT process_name, display_name, started_at, ended_at, last_seen_at
 FROM focus_segments
 "#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
+            )
+            .fetch_all(&self.pool),
+            sqlx::query(
+                r#"
+SELECT process_name, display_name, started_at, ended_at, last_seen_at
+FROM visible_window_segments
+"#,
+            )
+            .fetch_all(&self.pool),
+            sqlx::query(
+                r#"
+SELECT domain, started_at, ended_at, last_seen_at
+FROM browser_segments
+"#,
+            )
+            .fetch_all(&self.pool),
+            sqlx::query(
+                r#"
+SELECT state, started_at, ended_at, last_seen_at
+FROM presence_segments
+"#,
+            )
+            .fetch_all(&self.pool),
+        )?;
+
         for row in focus_rows {
             let process_name = row.get::<String, _>("process_name");
             let display_name = row.get::<String, _>("display_name");
@@ -1002,14 +1027,6 @@ FROM focus_segments
             )?;
         }
 
-        let visible_rows = sqlx::query(
-            r#"
-SELECT process_name, display_name, started_at, ended_at, last_seen_at
-FROM visible_window_segments
-"#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
         for row in visible_rows {
             let process_name = row.get::<String, _>("process_name");
             let display_name = row.get::<String, _>("display_name");
@@ -1030,14 +1047,6 @@ FROM visible_window_segments
             )?;
         }
 
-        let browser_rows = sqlx::query(
-            r#"
-SELECT domain, started_at, ended_at, last_seen_at
-FROM browser_segments
-"#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
         for row in browser_rows {
             let domain = row.get::<String, _>("domain");
             let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
@@ -1057,14 +1066,6 @@ FROM browser_segments
             )?;
         }
 
-        let presence_rows = sqlx::query(
-            r#"
-SELECT state, started_at, ended_at, last_seen_at
-FROM presence_segments
-"#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
         for row in presence_rows {
             let state = row.get::<String, _>("state");
             let started_at = parse_time(row.get::<String, _>("started_at").as_str())?;
@@ -1299,8 +1300,14 @@ SET value = excluded.value,
         let day_end_text = format_time(day_end_utc)?;
         let now_text = format_time(now_utc)?;
 
-        let focus_rows = sqlx::query(
-            r#"
+        // Run all four segment queries in parallel. Each query hits a
+        // different table with its own index, so they don't contend on the
+        // same pages. With SQLite WAL mode, concurrent reads are safe and
+        // don't block each other. This cuts the endpoint latency from
+        // ~4×round-trip to ~1×round-trip.
+        let (focus_rows, browser_rows, presence_rows, visible_rows) = tokio::try_join!(
+            sqlx::query(
+                r#"
 SELECT *
 FROM (
     SELECT id, process_name, display_name, exe_path, window_title, is_browser, started_at, ended_at
@@ -1315,17 +1322,15 @@ FROM (
 )
 ORDER BY started_at ASC
 "#,
-        )
-        .bind(&day_start_text)
-        .bind(&day_end_text)
-        .bind(&day_end_text)
-        .bind(&now_text)
-        .bind(&day_start_text)
-        .fetch_all(&self.pool)
-        .await?;
-
-        let browser_rows = sqlx::query(
-            r#"
+            )
+            .bind(&day_start_text)
+            .bind(&day_end_text)
+            .bind(&day_end_text)
+            .bind(&now_text)
+            .bind(&day_start_text)
+            .fetch_all(&self.pool),
+            sqlx::query(
+                r#"
 SELECT *
 FROM (
     SELECT id, domain, page_title, browser_window_id, tab_id, started_at, ended_at
@@ -1340,17 +1345,15 @@ FROM (
 )
 ORDER BY started_at ASC
 "#,
-        )
-        .bind(&day_start_text)
-        .bind(&day_end_text)
-        .bind(&day_end_text)
-        .bind(&now_text)
-        .bind(&day_start_text)
-        .fetch_all(&self.pool)
-        .await?;
-
-        let presence_rows = sqlx::query(
-            r#"
+            )
+            .bind(&day_start_text)
+            .bind(&day_end_text)
+            .bind(&day_end_text)
+            .bind(&now_text)
+            .bind(&day_start_text)
+            .fetch_all(&self.pool),
+            sqlx::query(
+                r#"
 SELECT *
 FROM (
     SELECT id, state, started_at, ended_at
@@ -1365,17 +1368,15 @@ FROM (
 )
 ORDER BY started_at ASC
 "#,
-        )
-        .bind(&day_start_text)
-        .bind(&day_end_text)
-        .bind(&day_end_text)
-        .bind(&now_text)
-        .bind(&day_start_text)
-        .fetch_all(&self.pool)
-        .await?;
-
-        let visible_rows = sqlx::query(
-            r#"
+            )
+            .bind(&day_start_text)
+            .bind(&day_end_text)
+            .bind(&day_end_text)
+            .bind(&now_text)
+            .bind(&day_start_text)
+            .fetch_all(&self.pool),
+            sqlx::query(
+                r#"
 SELECT *
 FROM (
     SELECT id, process_name, display_name, exe_path, window_title, hwnd, process_id, visible_area_ratio, started_at, ended_at
@@ -1390,14 +1391,14 @@ FROM (
 )
 ORDER BY started_at ASC
 "#,
-        )
-        .bind(&day_start_text)
-        .bind(&day_end_text)
-        .bind(&day_end_text)
-        .bind(&now_text)
-        .bind(&day_start_text)
-        .fetch_all(&self.pool)
-        .await?;
+            )
+            .bind(&day_start_text)
+            .bind(&day_end_text)
+            .bind(&day_end_text)
+            .bind(&now_text)
+            .bind(&day_start_text)
+            .fetch_all(&self.pool),
+        )?;
 
         let mut focus_segments = Vec::new();
         for row in focus_rows {

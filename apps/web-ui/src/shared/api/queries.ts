@@ -117,11 +117,14 @@ export function useMonthCalendarQuery(
   })
 }
 
-export function useAgentSettingsQuery() {
+export function useAgentSettingsQuery(options?: QueryHookOptions) {
+  const { enabled, ...queryOptions } = options ?? {}
   return useQuery({
     queryKey: apiQueryKeys.agentSettings(),
     queryFn: ({ signal }) => getAgentSettings(signal),
+    enabled: enabled ?? true,
     placeholderData: keepPreviousData,
+    ...queryOptions,
   })
 }
 

@@ -1,5 +1,4 @@
 import type { DaySummary } from '../api'
-import type { ChartSegment } from './chart-model'
 
 export const MAX_ZOOM_HOURS = 8
 export const MIN_ZOOM_HOURS = 1 / 12
@@ -96,77 +95,8 @@ export function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`
 }
 
-export function overlapDuration(segment: ChartSegment, viewStartSec: number, viewEndSec: number) {
-  return Math.max(0, Math.min(segment.endSec, viewEndSec) - Math.max(segment.startSec, viewStartSec))
-}
-
-export function sumOverlappedDuration(
-  segments: ChartSegment[],
-  viewStartSec: number,
-  viewEndSec: number,
-) {
-  return segments.reduce(
-    (total, segment) => total + overlapDuration(segment, viewStartSec, viewEndSec),
-    0,
-  )
-}
-
 export function clampNumber(value: number, min: number, max: number) {
   return Math.max(min, Math.min(value, max))
-}
-
-export function buildVisibleFocusItems(
-  segments: ChartSegment[],
-  viewStartSec: number,
-  viewEndSec: number,
-) {
-  return segments
-    .filter((segment) => segment.endSec > viewStartSec && segment.startSec < viewEndSec)
-    .sort((left, right) => {
-      if (left.startSec !== right.startSec) {
-        return left.startSec - right.startSec
-      }
-
-      return right.durationSec - left.durationSec
-    })
-}
-
-export function buildPrimaryBrowserDomainMap(
-  focusSegments: ChartSegment[],
-  browserSegments: ChartSegment[],
-) {
-  const domainBySegmentId = new Map<string, string>()
-
-  for (const focusSegment of focusSegments) {
-    if (!focusSegment.isBrowser) {
-      continue
-    }
-
-    const domainDurations = new Map<string, number>()
-
-    for (const browserSegment of browserSegments) {
-      const overlapStart = Math.max(focusSegment.startSec, browserSegment.startSec)
-      const overlapEnd = Math.min(focusSegment.endSec, browserSegment.endSec)
-
-      if (overlapEnd <= overlapStart) {
-        continue
-      }
-
-      domainDurations.set(
-        browserSegment.label,
-        (domainDurations.get(browserSegment.label) ?? 0) + (overlapEnd - overlapStart),
-      )
-    }
-
-    const primaryDomain = Array.from(domainDurations.entries())
-      .sort((left, right) => right[1] - left[1])[0]?.[0]
-
-    if (primaryDomain) {
-      domainBySegmentId.set(focusSegment.id, primaryDomain)
-    }
-  }
-
-  return domainBySegmentId
 }
 
 export function parseConfigList(value: string) {

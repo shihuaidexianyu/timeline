@@ -109,6 +109,62 @@ export function SettingsPage(props: {
             </div>
           </section>
 
+          {/* Data management: export + backup hint */}
+          <section className="settings-winui-section">
+            <h3 className="settings-winui-section-title">数据管理</h3>
+            <div className="settings-winui-card">
+              <div className="settings-winui-card-header">
+                <div>
+                  <div className="settings-winui-card-title">导出当日数据</div>
+                  <div className="settings-winui-card-subtitle">
+                    导出 {props.selectedDate} 的完整 segment 数据为 CSV 或 JSON 文件
+                  </div>
+                </div>
+              </div>
+              <div className="settings-winui-row">
+                <div className="settings-winui-row-label">导出格式</div>
+                <div className="settings-winui-row-control">
+                  <div className="ui-segmented" role="group" aria-label="导出格式">
+                    <a
+                      className="ui-segmented-item"
+                      href={`${API_BASE_URL}/api/export?date=${props.selectedDate}&format=csv`}
+                      download={`timeline-${props.selectedDate}.csv`}
+                    >
+                      CSV
+                    </a>
+                    <a
+                      className="ui-segmented-item"
+                      href={`${API_BASE_URL}/api/export?date=${props.selectedDate}&format=json`}
+                      download={`timeline-${props.selectedDate}.json`}
+                    >
+                      JSON
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="settings-winui-card">
+              <div className="settings-winui-card-header">
+                <div>
+                  <div className="settings-winui-card-title">数据备份</div>
+                  <div className="settings-winui-card-subtitle">
+                    所有数据保存在本地 SQLite 数据库中。建议定期备份以下路径的文件
+                  </div>
+                </div>
+              </div>
+              <dl className="settings-winui-list">
+                <div>
+                  <dt>备份建议</dt>
+                  <dd>
+                    关闭 timeline 后复制数据库文件到安全位置即可完成备份。
+                    数据库使用 WAL 模式，建议同时复制 <code>-wal</code> 和 <code>-shm</code> 文件。
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          </section>
+
           {/* Startup & collection */}
           <section className="settings-winui-section">
             <h3 className="settings-winui-section-title">启动与采集</h3>

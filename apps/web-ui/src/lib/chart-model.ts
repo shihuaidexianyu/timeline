@@ -69,14 +69,6 @@ function getDomainPresetColors(): string[] {
   ]
 }
 
-export type TooltipDatum = {
-  x: number
-  y: number
-  color: string
-  title: string
-  lines: string[]
-}
-
 export type DashboardFilter = {
   kind: 'app' | 'domain'
   key: string
@@ -123,12 +115,6 @@ export type DashboardModel = {
     browserCount: number
     presenceCount: number
   }
-}
-
-export type BrowserDetailModel = {
-  segments: ChartSegment[]
-  slices: DonutSlice[]
-  totalSeconds: number
 }
 
 type Interval = {
@@ -194,49 +180,6 @@ export function buildDashboardModel(
       browserCount: browserSegmentsWithColor.length,
       presenceCount: presenceSegments.length,
     },
-  }
-}
-
-export function buildBrowserDetailModel(
-  selectedFocusSegment: ChartSegment | null,
-  browserSegments: ChartSegment[],
-  selectedDomainKey: string | null,
-): BrowserDetailModel {
-  if (!selectedFocusSegment || !selectedFocusSegment.isBrowser) {
-    return {
-      segments: [],
-      slices: [],
-      totalSeconds: 0,
-    }
-  }
-
-  const overlappingSegments = browserSegments
-    .map((segment) => {
-      const startSec = Math.max(segment.startSec, selectedFocusSegment.startSec)
-      const endSec = Math.min(segment.endSec, selectedFocusSegment.endSec)
-
-      if (endSec <= startSec) {
-        return null
-      }
-
-      return {
-        ...segment,
-        id: `${segment.id}-detail-${startSec}`,
-        startSec,
-        endSec,
-        durationSec: endSec - startSec,
-      }
-    })
-    .filter((segment): segment is ChartSegment => segment !== null)
-
-  const filteredSegments = selectedDomainKey
-    ? overlappingSegments.filter((segment) => segment.key === selectedDomainKey)
-    : overlappingSegments
-
-  return {
-    segments: filteredSegments,
-    slices: buildDonutSlices(overlappingSegments, 6),
-    totalSeconds: sumDurations(filteredSegments),
   }
 }
 

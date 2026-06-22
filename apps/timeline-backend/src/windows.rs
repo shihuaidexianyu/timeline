@@ -321,6 +321,42 @@ pub fn detect_presence(idle_threshold: Duration) -> Result<PresenceState> {
     }
 }
 
+/// Checks if the current foreground window covers the entire area of its
+/// dominant monitor (i.e. is in fullscreen mode). Used by the health reminder
+/// to suppress toasts during presentations and fullscreen media playback.
+pub fn is_foreground_fullscreen() -> Result<bool> {
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.0.is_null() {
+        return Ok(false);
+    }
+
+    if !is_visible_window_candidate(hwnd) || unsafe { IsIconic(hwnd).as_bool() } {
+        return Ok(false);
+    }
+
+    let Some(window_rect) = window_rect(hwnd) else {
+        return Ok(false);
+    };
+
+    let monitor_rects = monitor_rects();
+    let Some(monitor_rect) = dominant_monitor_for_window(window_rect, &monitor_rects) else {
+        return Ok(false);
+    };
+
+    // Treat as fullscreen if the window covers at least 98% of the monitor
+    // area. A small tolerance handles edge cases like auto-hide taskbars.
+    let window_area = window_rect
+        .intersect(monitor_rect)
+        .map(|r| r.area())
+        .unwrap_or(0);
+    let monitor_area = monitor_rect.area();
+    if monitor_area <= 0 {
+        return Ok(false);
+    }
+
+    Ok(window_area as f64 / monitor_area as f64 >= 0.98)
+}
+
 fn enumerate_top_level_windows() -> Result<Vec<HWND>> {
     unsafe extern "system" fn collect_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let windows = unsafe { &mut *(lparam.0 as *mut Vec<HWND>) };

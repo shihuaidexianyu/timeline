@@ -13,7 +13,7 @@ import {
     niceWeeklyAxisMax,
     sumSlices,
 } from '../features/stats/stats-selectors'
-import { RefreshBadge } from '../shared/ui'
+import { ErrorBoundary, RefreshBadge } from '../shared/ui'
 import {
     formatDuration,
     presenceColor,
@@ -67,6 +67,31 @@ export function StatsPage(props: {
     const appDistributionLoading =
         props.loading || (props.isAppStatsRefreshing && props.appStats.length === 0)
 
+    // First-run guidance: when data has loaded but is completely empty (no
+    // focus/presence/visible-window segments), show a welcome card instead of
+    // empty charts so the user knows the agent is working.
+    const isEmpty =
+        !props.loading &&
+        (props.dashboard?.summary.focusSeconds ?? 0) === 0 &&
+        (props.dashboard?.summary.activeSeconds ?? 0) === 0 &&
+        (props.calendarDays ?? []).every(
+            (day) => day.focus_seconds === 0 && day.active_seconds === 0,
+        )
+
+    if (isEmpty) {
+        return (
+            <section className="page-stack">
+                <div className="state-card empty-card" style={{ padding: '2.5rem', textAlign: 'center' }}>
+                    <h2 style={{ marginBottom: '0.75rem' }}>Timeline 正在后台记录</h2>
+                    <p style={{ color: 'var(--text-muted)', lineHeight: 1.6, maxWidth: '32rem', margin: '0 auto' }}>
+                        我们刚开始收集你的活动数据，需要几分钟才能生成统计图表。
+                        请正常使用电脑，几分钟后刷新此页面即可看到今日时间线、应用分布和使用热度。
+                    </p>
+                </div>
+            </section>
+        )
+    }
+
     return (
         <section className="page-stack">
             <section className="stats-overview-grid">
@@ -95,20 +120,27 @@ export function StatsPage(props: {
                         </div>
                         <RefreshBadge active={props.isAppStatsRefreshing} />
                     </div>
+                    <p className="stats-metric-note">
+                        {props.appUsageMetric === 'visible_window'
+                            ? '按实际露出的可见窗口累计，同一时间多个窗口可并行计时，总时长可能超过活跃时长。'
+                            : '按前台焦点窗口累计，同一时刻只累计一个应用。'}
+                    </p>
                     {props.appStatsError && props.appStats.length === 0 ? (
                         <div className="state-card error-card">{props.appStatsError}</div>
                     ) : (
-                        <Suspense fallback={<ChartLazyFallback variant="donut" />}>
-                            <LazyDonutChart
-                                loading={appDistributionLoading}
-                                title={props.appUsageMetric === 'visible_window' ? '可见窗口分布' : '应用分布'}
-                                totalLabel={formatDuration(props.appStatsTotalSeconds)}
-                                slices={props.appStats}
-                                filter={props.appFilter}
-                                filterKind="app"
-                                onSelect={props.setAppFilter}
-                            />
-                        </Suspense>
+                        <ErrorBoundary>
+                            <Suspense fallback={<ChartLazyFallback variant="donut" />}>
+                                <LazyDonutChart
+                                    loading={appDistributionLoading}
+                                    title={props.appUsageMetric === 'visible_window' ? '可见窗口分布' : '应用分布'}
+                                    totalLabel={formatDuration(props.appStatsTotalSeconds)}
+                                    slices={props.appStats}
+                                    filter={props.appFilter}
+                                    filterKind="app"
+                                    onSelect={props.setAppFilter}
+                                />
+                            </Suspense>
+                        </ErrorBoundary>
                     )}
                 </div>
 
@@ -119,17 +151,19 @@ export function StatsPage(props: {
                         </div>
                         <RefreshBadge active={props.isTimelineRefreshing} />
                     </div>
-                    <Suspense fallback={<ChartLazyFallback variant="donut" />}>
-                        <LazyDonutChart
-                            loading={props.loading}
-                            title="域名分布"
-                            totalLabel={formatDuration(sumSlices(props.dashboard?.domainSlices ?? []))}
-                            slices={props.dashboard?.domainSlices ?? []}
-                            filter={props.domainFilter}
-                            filterKind="domain"
-                            onSelect={props.setDomainFilter}
-                        />
-                    </Suspense>
+                    <ErrorBoundary>
+                        <Suspense fallback={<ChartLazyFallback variant="donut" />}>
+                            <LazyDonutChart
+                                loading={props.loading}
+                                title="域名分布"
+                                totalLabel={formatDuration(sumSlices(props.dashboard?.domainSlices ?? []))}
+                                slices={props.dashboard?.domainSlices ?? []}
+                                filter={props.domainFilter}
+                                filterKind="domain"
+                                onSelect={props.setDomainFilter}
+                            />
+                        </Suspense>
+                    </ErrorBoundary>
                 </div>
 
                 <div className="panel page-panel stats-calendar-card">
@@ -295,23 +329,25 @@ function FocusBalanceCard(props: {
             <div className="focus-distribution-layout">
                 <div className="showcase-donut-wrap">
                     <div className="showcase-compact-donut">
-                        <Suspense fallback={<ChartLazyFallback variant="compact-donut" />}>
-                            <LazyCompactDonutChart
-                                loading={props.loading}
-                                slices={presenceSlices}
-                                totalLabel={formatDuration(selectedPresenceValue)}
-                                secondaryLabel={selectedPresenceLabel}
-                                footerLabel={`总状态 ${formatDuration(presenceTotal)}`}
-                                selectedKey={selectedPresenceKey}
-                                onSelectKey={(key) => {
-                                    if (key === 'active' || key === 'idle' || key === 'locked') {
-                                        setSelectedPresenceKey(key)
-                                    }
-                                }}
-                                height={232}
-                                emptyLabel="所选日期没有状态分布数据"
-                            />
-                        </Suspense>
+                        <ErrorBoundary>
+                            <Suspense fallback={<ChartLazyFallback variant="compact-donut" />}>
+                                <LazyCompactDonutChart
+                                    loading={props.loading}
+                                    slices={presenceSlices}
+                                    totalLabel={formatDuration(selectedPresenceValue)}
+                                    secondaryLabel={selectedPresenceLabel}
+                                    footerLabel={`总状态 ${formatDuration(presenceTotal)}`}
+                                    selectedKey={selectedPresenceKey}
+                                    onSelectKey={(key) => {
+                                        if (key === 'active' || key === 'idle' || key === 'locked') {
+                                            setSelectedPresenceKey(key)
+                                        }
+                                    }}
+                                    height={232}
+                                    emptyLabel="所选日期没有状态分布数据"
+                                />
+                            </Suspense>
+                        </ErrorBoundary>
                     </div>
                 </div>
 

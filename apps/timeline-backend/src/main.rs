@@ -106,6 +106,14 @@ async fn run_backend_mode(backend_args: &[String]) -> Result<()> {
     let store = AgentStore::connect(&config, timezone).await?;
     store.restore_unclosed_segments().await?;
     store.ensure_daily_rollups().await?;
+    if config.data_retention_days > 0
+        && let Err(error) = store.prune_old_segments(config.data_retention_days).await
+    {
+        warn!(?error, "failed to prune old segments");
+    }
+    if let Err(error) = store.wal_checkpoint().await {
+        warn!(?error, "failed to checkpoint wal after startup");
+    }
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
 
     let state = AgentState::new(

@@ -510,7 +510,7 @@ async fn maybe_emit_health_reminder(
 ) -> Result<()> {
     let mut should_notify = false;
     let mut streak_secs = 0i64;
-    let threshold_secs = runtime_config.health_reminder_threshold_secs.max(1);
+    let threshold_secs = runtime_config.health_reminder_threshold_secs.max(1) as i64;
 
     {
         let mut runtime = state.runtime().await;
@@ -518,7 +518,7 @@ async fn maybe_emit_health_reminder(
 
         if !runtime_config.health_reminder_enabled {
             reminder.active_streak_started_at = None;
-            reminder.reminded_for_current_streak = false;
+            reminder.next_reminder_threshold_secs = None;
             return Ok(());
         }
 
@@ -526,15 +526,31 @@ async fn maybe_emit_health_reminder(
             PresenceState::Active => {
                 let started_at = reminder.active_streak_started_at.get_or_insert(observed_at);
                 let elapsed = (observed_at - *started_at).whole_seconds().max(0);
-                if elapsed >= threshold_secs as i64 && !reminder.reminded_for_current_streak {
-                    reminder.reminded_for_current_streak = true;
-                    should_notify = true;
-                    streak_secs = elapsed;
+
+                let next_threshold = reminder
+                    .next_reminder_threshold_secs
+                    .unwrap_or(threshold_secs);
+
+                if elapsed >= next_threshold {
+                    // Suppress the toast if the foreground window is fullscreen
+                    // (presentations, fullscreen media). The streak continues; we
+                    // just defer the notification to the next polling cycle that
+                    // finds the foreground NOT fullscreen.
+                    let fullscreen = crate::windows::is_foreground_fullscreen().unwrap_or(false);
+                    if !fullscreen {
+                        should_notify = true;
+                        streak_secs = elapsed;
+                        // Next reminder at 1.5x the current trigger point, capped
+                        // at 4x the base threshold so very long sessions don't
+                        // escalate unreasonably.
+                        let next = (next_threshold * 3 / 2).min(threshold_secs * 4);
+                        reminder.next_reminder_threshold_secs = Some(next);
+                    }
                 }
             }
             PresenceState::Idle | PresenceState::Locked => {
                 reminder.active_streak_started_at = None;
-                reminder.reminded_for_current_streak = false;
+                reminder.next_reminder_threshold_secs = None;
             }
         }
     }
@@ -545,7 +561,7 @@ async fn maybe_emit_health_reminder(
             .append_raw_event(
                 "health_break_reminder",
                 &HealthReminderEvent {
-                    threshold_secs,
+                    threshold_secs: threshold_secs as u64,
                     streak_secs,
                 },
                 observed_at,
@@ -686,17 +702,54 @@ enum BrowserTransition {
 }
 
 fn is_ignored_app(runtime_config: &RuntimeConfigSnapshot, process_name: &str) -> bool {
-    runtime_config
-        .ignored_apps
-        .iter()
-        .any(|candidate| candidate.eq_ignore_ascii_case(process_name))
+    let lower = process_name.to_ascii_lowercase();
+    runtime_config.ignored_apps.iter().any(|candidate| {
+        let pattern = candidate.to_ascii_lowercase();
+        matches_pattern(&lower, &pattern)
+    })
 }
 
 fn is_ignored_domain(runtime_config: &RuntimeConfigSnapshot, domain: &str) -> bool {
-    runtime_config
-        .ignored_domains
-        .iter()
-        .any(|candidate| candidate.eq_ignore_ascii_case(domain))
+    let lower = domain.to_ascii_lowercase();
+    runtime_config.ignored_domains.iter().any(|candidate| {
+        let pattern = candidate.to_ascii_lowercase();
+        matches_pattern(&lower, &pattern)
+    })
+}
+
+/// Matches a value against a pattern that may contain `*` (any sequence) and
+/// `?` (single char) wildcards. Falls back to exact match for patterns without
+/// wildcards, preserving case-insensitive exact-match behavior for existing
+/// configs that don't use wildcards.
+fn matches_pattern(value: &str, pattern: &str) -> bool {
+    if !pattern.contains('*') && !pattern.contains('?') {
+        return value == pattern;
+    }
+
+    // Greedy wildcard match via DP. value[i] vs pattern[j].
+    let v: Vec<char> = value.chars().collect();
+    let p: Vec<char> = pattern.chars().collect();
+    let mut dp = vec![vec![false; p.len() + 1]; v.len() + 1];
+    dp[0][0] = true;
+
+    // Leading `*` in the pattern matches empty string.
+    for j in 1..=p.len() {
+        if p[j - 1] == '*' {
+            dp[0][j] = dp[0][j - 1];
+        }
+    }
+
+    for i in 1..=v.len() {
+        for j in 1..=p.len() {
+            if p[j - 1] == '*' {
+                dp[i][j] = dp[i - 1][j] || dp[i][j - 1];
+            } else if p[j - 1] == '?' || p[j - 1] == v[i - 1] {
+                dp[i][j] = dp[i - 1][j - 1];
+            }
+        }
+    }
+
+    dp[v.len()][p.len()]
 }
 
 fn browser_payload_for_storage(
@@ -746,7 +799,9 @@ fn title_case_word(value: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{browser_payload_for_storage, trackable_visible_windows};
+    use super::{
+        browser_payload_for_storage, is_ignored_app, matches_pattern, trackable_visible_windows,
+    };
     use crate::state::RuntimeConfigSnapshot;
     use crate::windows::VisibleWindowSnapshot;
 
@@ -815,5 +870,41 @@ mod tests {
                 .values()
                 .any(|window| window.process_name == "code.exe")
         );
+    }
+
+    #[test]
+    fn matches_pattern_exact() {
+        assert!(matches_pattern("code.exe", "code.exe"));
+        assert!(!matches_pattern("code.exe", "msedge.exe"));
+    }
+
+    #[test]
+    fn matches_pattern_star() {
+        assert!(matches_pattern("code.exe", "*.exe"));
+        assert!(matches_pattern("cicada-helper.exe", "cicada*"));
+        assert!(!matches_pattern("code.exe", "ms*.exe"));
+    }
+
+    #[test]
+    fn matches_pattern_question() {
+        assert!(matches_pattern("code.exe", "cod?.exe"));
+        assert!(!matches_pattern("code.exe", "cod??.exe"));
+    }
+
+    #[test]
+    fn is_ignored_app_supports_wildcards() {
+        let config = RuntimeConfigSnapshot {
+            idle_threshold_secs: 300,
+            poll_interval_millis: 1000,
+            health_reminder_enabled: true,
+            health_reminder_threshold_secs: 3000,
+            record_window_titles: true,
+            record_page_titles: true,
+            ignored_apps: vec!["*.exe".to_string(), "Cicada*".to_string()],
+            ignored_domains: Vec::new(),
+        };
+        assert!(is_ignored_app(&config, "code.exe"));
+        assert!(is_ignored_app(&config, "CicadaHelper.exe"));
+        assert!(!is_ignored_app(&config, "unknown.bin"));
     }
 }

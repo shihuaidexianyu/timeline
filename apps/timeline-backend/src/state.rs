@@ -57,7 +57,10 @@ pub struct OpenVisibleWindowSegment {
 #[derive(Debug, Default, Clone)]
 pub struct HealthReminderRuntime {
     pub active_streak_started_at: Option<OffsetDateTime>,
-    pub reminded_for_current_streak: bool,
+    /// The next streak duration (in seconds) at which a reminder should fire.
+    /// Increases by 1.5x after each reminder to avoid nagging while still
+    /// re-alerting during very long active sessions.
+    pub next_reminder_threshold_secs: Option<i64>,
 }
 
 #[derive(Debug, Clone)]

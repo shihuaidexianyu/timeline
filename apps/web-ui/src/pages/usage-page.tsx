@@ -1,6 +1,6 @@
 import { lazy, Suspense } from 'react'
 import { ChartLazyFallback } from '../components/chart-lazy-fallback'
-import { RefreshBadge } from '../shared/ui'
+import { ErrorBoundary, RefreshBadge } from '../shared/ui'
 import type {
   AppUsageTrendResponse,
   TrendPeriod,
@@ -96,21 +96,25 @@ export function UsagePage(props: {
         ) : (
           <>
             {appTrendView === 'day' ? (
-              <Suspense fallback={<ChartLazyFallback variant="day" />}>
-                <LazyDayUsageView
-                  dashboard={props.dashboard}
-                  metric={props.appUsageMetric}
-                  selectedDate={props.selectedDate}
-                  loading={props.loading || props.isTimelineRefreshing}
-                />
-              </Suspense>
+              <ErrorBoundary>
+                <Suspense fallback={<ChartLazyFallback variant="day" />}>
+                  <LazyDayUsageView
+                    dashboard={props.dashboard}
+                    metric={props.appUsageMetric}
+                    selectedDate={props.selectedDate}
+                    loading={props.loading || props.isTimelineRefreshing}
+                  />
+                </Suspense>
+              </ErrorBoundary>
             ) : (
-              <Suspense fallback={<ChartLazyFallback variant="trend" />}>
-                <LazyAppUsageTrendChart
-                  trend={props.appTrend}
-                  loading={props.loading || (props.isAppTrendRefreshing && !props.appTrend)}
-                />
-              </Suspense>
+              <ErrorBoundary>
+                <Suspense fallback={<ChartLazyFallback variant="trend" />}>
+                  <LazyAppUsageTrendChart
+                    trend={props.appTrend}
+                    loading={props.loading || (props.isAppTrendRefreshing && !props.appTrend)}
+                  />
+                </Suspense>
+              </ErrorBoundary>
             )}
           </>
         )}

@@ -36,6 +36,10 @@ pub struct AppConfig {
     /// 是否开启 `/api/debug/recent-events` 端点。该端点会暴露窗口标题等
     /// 敏感信息，仅用于本地调试，默认关闭。
     pub debug_events_enabled: bool,
+    /// 原始 segment 保留天数。超过此天数的已关闭 segment 会在启动时被清理。
+    /// 设为 0 表示永不清理。默认 365 天。daily rollup 汇总表不受此限制，
+    /// 统计与日历数据不会丢失。
+    pub data_retention_days: u64,
 }
 
 impl Default for AppConfig {
@@ -59,6 +63,7 @@ impl Default for AppConfig {
             log_dir: PathBuf::from("data/logs"),
             log_retention_days: 7,
             debug_events_enabled: false,
+            data_retention_days: 365,
         }
     }
 }

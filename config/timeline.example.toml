@@ -16,6 +16,7 @@ record_page_titles = true
 log_to_file = true
 log_retention_days = 7
 debug_events_enabled = false
+data_retention_days = 365
 
 ignored_apps = []
 ignored_domains = []

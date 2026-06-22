@@ -47,7 +47,8 @@ pub fn build_router(state: AgentState) -> Router {
         .route("/api/settings/config", post(post_update_agent_config))
         .route("/api/events/browser", post(post_browser_event))
         .route("/api/calendar/month", get(get_month_calendar))
-        .route("/api/stats/summary", get(get_period_summary));
+        .route("/api/stats/summary", get(get_period_summary))
+        .route("/api/export", get(get_export));
 
     if state.config().debug_events_enabled {
         routes = routes.route("/api/debug/recent-events", get(get_recent_events));
@@ -295,6 +296,148 @@ async fn get_period_summary(
         .read_period_summary(date, state.timezone())
         .await?;
     Ok(Json(ApiResponse::ok(summary)))
+}
+
+#[derive(Debug, Deserialize)]
+struct ExportQuery {
+    date: Option<String>,
+    format: Option<String>,
+}
+
+/// Exports a single day's segments as CSV or JSON. CSV includes one row per
+/// segment across all four segment types (focus / browser / presence /
+/// visible_window), with a `type` column to distinguish them. JSON returns
+/// the same structure as `/api/timeline/day`.
+async fn get_export(
+    State(state): State<AgentState>,
+    Query(query): Query<ExportQuery>,
+) -> Result<Response, AppError> {
+    let date = parse_or_today(query.date.as_deref(), state.timezone())?;
+    let format = query.format.as_deref().unwrap_or("csv");
+    let timeline = state
+        .store()
+        .read_day_timeline(date, state.timezone())
+        .await?;
+
+    match format {
+        "json" => {
+            let body = serde_json::to_string(&timeline)
+                .map_err(|e| AppError::internal(anyhow::anyhow!(e)))?;
+            Ok((
+                [
+                    (CONTENT_TYPE, "application/json; charset=utf-8".to_string()),
+                    (
+                        HeaderName::from_static("content-disposition"),
+                        format!("attachment; filename=\"timeline-{}.json\"", date),
+                    ),
+                ],
+                body,
+            )
+                .into_response())
+        }
+        "csv" => {
+            let body = build_csv_export(&timeline);
+            Ok((
+                [
+                    (CONTENT_TYPE, "text/csv; charset=utf-8".to_string()),
+                    (
+                        HeaderName::from_static("content-disposition"),
+                        format!("attachment; filename=\"timeline-{}.csv\"", date),
+                    ),
+                ],
+                body,
+            )
+                .into_response())
+        }
+        _ => Err(AppError::bad_request(
+            "invalid_format",
+            "format must be csv or json",
+        )),
+    }
+}
+
+/// Builds a CSV string from a day's timeline. Columns:
+/// `type,started_at,ended_at,process_name,display_name,domain,state,hwnd,process_id,window_title`
+fn build_csv_export(timeline: &common::TimelineDayResponse) -> String {
+    let mut rows: Vec<String> = Vec::new();
+    rows.push("type,started_at,ended_at,process_name,display_name,domain,state,hwnd,process_id,window_title".to_string());
+
+    for seg in &timeline.focus_segments {
+        rows.push(format!(
+            "focus,{},{},{},{},,,,{},,{}",
+            format_rfc3339(seg.started_at),
+            format_rfc3339_opt(seg.ended_at),
+            csv_escape(&seg.app.process_name),
+            csv_escape(&seg.app.display_name),
+            "", // hwnd not in focus segment
+            csv_escape_opt(&seg.app.window_title),
+        ));
+    }
+
+    for seg in &timeline.browser_segments {
+        rows.push(format!(
+            "browser,{},{},,,{},{},,,",
+            format_rfc3339(seg.started_at),
+            format_rfc3339_opt(seg.ended_at),
+            csv_escape(&seg.domain),
+            csv_escape_opt(&seg.page_title),
+        ));
+    }
+
+    for seg in &timeline.presence_segments {
+        rows.push(format!(
+            "presence,{},{},,,,{},{},,",
+            format_rfc3339(seg.started_at),
+            format_rfc3339_opt(seg.ended_at),
+            presence_state_csv(&seg.state),
+            "",
+        ));
+    }
+
+    for seg in &timeline.visible_window_segments {
+        rows.push(format!(
+            "visible_window,{},{},{},{},,,{},{},{}",
+            format_rfc3339(seg.started_at),
+            format_rfc3339_opt(seg.ended_at),
+            csv_escape(&seg.app.process_name),
+            csv_escape(&seg.app.display_name),
+            seg.hwnd,
+            seg.process_id,
+            csv_escape_opt(&seg.app.window_title),
+        ));
+    }
+
+    rows.join("\n")
+}
+
+fn format_rfc3339(t: OffsetDateTime) -> String {
+    t.format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default()
+}
+
+fn format_rfc3339_opt(t: Option<OffsetDateTime>) -> String {
+    t.map(format_rfc3339).unwrap_or_default()
+}
+
+fn csv_escape(value: &str) -> String {
+    if value.contains(',') || value.contains('"') || value.contains('\n') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
+
+fn csv_escape_opt(value: &Option<String>) -> String {
+    value.as_deref().map(csv_escape).unwrap_or_default()
+}
+
+fn presence_state_csv(state: &common::PresenceState) -> String {
+    match state {
+        common::PresenceState::Active => "active",
+        common::PresenceState::Idle => "idle",
+        common::PresenceState::Locked => "locked",
+    }
+    .to_string()
 }
 
 fn parse_or_today(value: Option<&str>, timezone: time::UtcOffset) -> Result<Date, AppError> {
@@ -559,10 +702,14 @@ impl AppError {
     }
 
     fn internal(error: anyhow::Error) -> Self {
+        // Log the full error chain for diagnostics, but return a generic
+        // message to the client so we don't leak SQL fragments, file paths,
+        // or OS error details to any local web page that can reach the API.
+        tracing::error!(?error, "internal API error");
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             code: "internal_error".to_string(),
-            message: error.to_string(),
+            message: "内部错误，请查看日志获取详情".to_string(),
         }
     }
 }

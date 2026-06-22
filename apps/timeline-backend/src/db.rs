@@ -896,6 +896,78 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         self.rebuild_daily_rollups().await
     }
 
+    /// Deletes closed segments older than `retention_days` from all four
+    /// segment tables. Open segments (NULL `ended_at`) are never deleted.
+    /// Daily rollup tables (`daily_*`) are NOT touched — aggregated stats
+    /// and calendar data are preserved indefinitely so long-term trends
+    /// remain visible even after raw segments are pruned.
+    pub async fn prune_old_segments(&self, retention_days: u64) -> Result<u64> {
+        if retention_days == 0 {
+            return Ok(0);
+        }
+
+        let cutoff = OffsetDateTime::now_utc() - Duration::days(retention_days as i64);
+        let cutoff_text = format_time(cutoff)?;
+        let mut total_deleted: u64 = 0;
+
+        for table in [
+            "focus_segments",
+            "browser_segments",
+            "presence_segments",
+            "visible_window_segments",
+        ] {
+            let sql = format!("DELETE FROM {table} WHERE ended_at IS NOT NULL AND ended_at < ?");
+            let result = sqlx::query(&sql)
+                .bind(&cutoff_text)
+                .execute(&self.pool)
+                .await?;
+            total_deleted += result.rows_affected();
+        }
+
+        // Also prune raw_events beyond their cap, in case the rolling cleanup
+        // fell behind (e.g. a long period without restarts).
+        let raw_pruned = self.cap_raw_events().await?;
+        total_deleted += raw_pruned;
+
+        if total_deleted > 0 {
+            tracing::info!(
+                retention_days,
+                cutoff = %cutoff_text,
+                total_deleted,
+                "pruned old segments"
+            );
+        }
+
+        Ok(total_deleted)
+    }
+
+    /// Trims `raw_events` to the most recent `RAW_EVENTS_MAX_ROWS` rows.
+    /// Returns the number of rows deleted.
+    async fn cap_raw_events(&self) -> Result<u64> {
+        let result = sqlx::query(
+            r#"
+            DELETE FROM raw_events
+            WHERE id NOT IN (
+                SELECT id FROM raw_events ORDER BY id DESC LIMIT ?
+            )
+            "#,
+        )
+        .bind(RAW_EVENTS_MAX_ROWS)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    /// Runs `PRAGMA wal_checkpoint(TRUNCATE)` to fold the WAL back into the
+    /// main database file and shrink the WAL file. Call after large pruning
+    /// operations or periodically to keep the WAL from growing unbounded.
+    pub async fn wal_checkpoint(&self) -> Result<()> {
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn rebuild_daily_rollups(&self) -> Result<()> {
         let mut app_buckets: BTreeMap<(String, String), RollupBucket> = BTreeMap::new();
         let mut visible_app_buckets: BTreeMap<(String, String), RollupBucket> = BTreeMap::new();

@@ -2,6 +2,7 @@
 
 use crate::state::AgentState;
 use anyhow::{Context, Result};
+use common::DaySummary;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -391,20 +392,21 @@ fn show_message_box(
 }
 
 pub fn spawn_tray(state: AgentState) {
+    let runtime_handle = tokio::runtime::Handle::current();
     std::thread::spawn(move || {
-        if let Err(error) = run_tray_loop(state) {
+        if let Err(error) = run_tray_loop(state, runtime_handle) {
             error!(?error, "tray loop stopped");
         }
     });
 }
 
-fn run_tray_loop(state: AgentState) -> Result<()> {
+fn run_tray_loop(state: AgentState, runtime_handle: tokio::runtime::Handle) -> Result<()> {
     let mut event_loop_builder = EventLoopBuilder::<TrayUserEvent>::with_user_event();
     #[cfg(target_os = "windows")]
     event_loop_builder.with_any_thread(true);
 
     let event_loop = event_loop_builder.build();
-    let tray_menu = build_tray_menu();
+    let (tray_menu, today_item) = build_tray_menu();
     let tray_icon = build_tray_icon(&state).context("failed to build tray icon image")?;
     let open_id = MenuId::new(MENU_OPEN_ID);
     let logs_id = MenuId::new(MENU_LOGS_ID);
@@ -442,6 +444,9 @@ fn run_tray_loop(state: AgentState) -> Result<()> {
     info!("tray icon started");
 
     let state_for_loop = state.clone();
+    let handle_for_loop = runtime_handle.clone();
+    let mut last_today_refresh = Instant::now();
+    let mut last_today_text = String::new();
     event_loop.run(move |event, _, control_flow| {
         // Poll at 250ms to keep tray responsive while avoiding excessive CPU usage.
         *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(250));
@@ -449,6 +454,16 @@ fn run_tray_loop(state: AgentState) -> Result<()> {
         if state_for_loop.shutdown_requested() {
             *control_flow = ControlFlow::Exit;
             return;
+        }
+
+        // Refresh "today active" menu item every 30 seconds.
+        if last_today_refresh.elapsed() >= Duration::from_secs(30) {
+            last_today_refresh = Instant::now();
+            let today_text = read_today_active_text(&state_for_loop, &handle_for_loop);
+            if today_text != last_today_text {
+                last_today_text = today_text.clone();
+                today_item.set_text(&today_text);
+            }
         }
 
         match event {
@@ -487,20 +502,27 @@ fn run_tray_loop(state: AgentState) -> Result<()> {
     });
 }
 
-fn build_tray_menu() -> Menu {
+fn build_tray_menu() -> (Menu, MenuItem) {
     let menu = Menu::new();
     let open_item = MenuItem::with_id(MENU_OPEN_ID, "打开时间线", true, None::<Accelerator>);
+    let today_item = MenuItem::new("今日活跃：加载中…", false, None::<Accelerator>);
     let logs_item = MenuItem::with_id(MENU_LOGS_ID, "打开日志目录", true, None::<Accelerator>);
     let quit_item = MenuItem::with_id(MENU_QUIT_ID, "退出", true, None::<Accelerator>);
     menu.append(&open_item)
         .expect("failed to append open menu item");
+    menu.append(&PredefinedMenuItem::separator())
+        .expect("failed to append separator before today");
+    menu.append(&today_item)
+        .expect("failed to append today item");
+    menu.append(&PredefinedMenuItem::separator())
+        .expect("failed to append separator after today");
     menu.append(&logs_item)
         .expect("failed to append logs menu item");
     menu.append(&PredefinedMenuItem::separator())
         .expect("failed to append tray separator");
     menu.append(&quit_item)
         .expect("failed to append quit menu item");
-    menu
+    (menu, today_item)
 }
 
 /// Builds the tray icon from the same executable icon resource so tray/exe keep
@@ -637,4 +659,41 @@ fn set_pixel(rgba: &mut [u8], x: u32, y: u32, color: [u8; 4], size: u32) {
     rgba[index + 1] = color[1];
     rgba[index + 2] = color[2];
     rgba[index + 3] = color[3];
+}
+
+/// Reads today's active seconds from the database and formats it as a
+/// human-readable string for the tray menu (e.g. "今日活跃：2 小时 15 分"）。
+/// Runs on the tokio runtime via `block_on` since the tray thread is not
+/// part of the async runtime.
+fn read_today_active_text(state: &AgentState, runtime_handle: &tokio::runtime::Handle) -> String {
+    let timezone = state.timezone();
+    let today = OffsetDateTime::now_utc().to_offset(timezone).date();
+
+    let summary = runtime_handle.block_on(async {
+        state
+            .store()
+            .read_day_summary(today, timezone)
+            .await
+            .unwrap_or(DaySummary {
+                date: String::new(),
+                focus_seconds: 0,
+                active_seconds: 0,
+                browser_seconds: 0,
+                switch_count: 0,
+                top_app: None,
+                top_domain: None,
+            })
+    });
+
+    let hours = summary.active_seconds / 3600;
+    let minutes = (summary.active_seconds % 3600) / 60;
+    let text = if hours > 0 {
+        format!("{hours} 小时 {minutes} 分")
+    } else if minutes > 0 {
+        format!("{minutes} 分")
+    } else {
+        "不到 1 分钟".to_string()
+    };
+
+    format!("今日活跃：{text}")
 }

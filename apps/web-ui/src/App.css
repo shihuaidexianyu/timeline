@@ -57,6 +57,10 @@
   color: var(--text-soft);
   font-size: 1rem;
   line-height: 1.6;
+  /* Reserve space for two lines so switching between pages with different
+     description lengths doesn't cause the header height to jump and shift
+     the content below. */
+  min-height: 3.2em;
 }
 
 .eyebrow,

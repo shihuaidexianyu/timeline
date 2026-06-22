@@ -26,6 +26,16 @@ pub struct AppConfig {
     pub record_page_titles: bool,
     pub ignored_apps: Vec<String>,
     pub ignored_domains: Vec<String>,
+    /// 是否将日志写入文件（按天滚动到 `log_dir`）。Release 构建无控制台，
+    /// 强烈建议保持开启，否则用户遇到问题时无日志可查。
+    pub log_to_file: bool,
+    /// 日志文件目录（相对路径按配置文件所在目录解析）。默认与数据库同级。
+    pub log_dir: PathBuf,
+    /// 日志文件保留天数，0 表示永不清理。默认 7 天。
+    pub log_retention_days: u64,
+    /// 是否开启 `/api/debug/recent-events` 端点。该端点会暴露窗口标题等
+    /// 敏感信息，仅用于本地调试，默认关闭。
+    pub debug_events_enabled: bool,
 }
 
 impl Default for AppConfig {
@@ -45,6 +55,10 @@ impl Default for AppConfig {
             record_page_titles: true,
             ignored_apps: Vec::new(),
             ignored_domains: Vec::new(),
+            log_to_file: true,
+            log_dir: PathBuf::from("data/logs"),
+            log_retention_days: 7,
+            debug_events_enabled: false,
         }
     }
 }
@@ -77,12 +91,59 @@ impl AppConfig {
 
         config.resolve_relative_paths(path.parent().unwrap_or(Path::new(".")));
 
+        if let Err((code, message)) = config.validate() {
+            return Err(anyhow::anyhow!(
+                "配置文件 {:?} 存在无效字段 [{}]：{}。请在配置文件中修正后重试。",
+                path,
+                code,
+                message
+            ));
+        }
+
         Ok((config, path))
     }
 
     pub fn ensure_parent_dirs(&self) -> Result<()> {
         ensure_parent(&self.database_path)?;
         ensure_parent(&self.lockfile_path)?;
+        Ok(())
+    }
+
+    /// Validates that all numeric configuration fields fall within safe ranges.
+    /// Returns the first issue as a Chinese-facing `(code, message)` pair, or
+    /// `Ok(())` if the config is valid. Called both at startup and when the
+    /// UI posts a config update, so the same rules apply to both paths.
+    pub fn validate(&self) -> Result<(), (String, String)> {
+        if !(15..=1800).contains(&self.idle_threshold_secs) {
+            return Err((
+                "invalid_idle_threshold".to_string(),
+                format!(
+                    "idle_threshold_secs 必须在 15~1800 秒之间，当前为 {}",
+                    self.idle_threshold_secs
+                ),
+            ));
+        }
+
+        if !(250..=5000).contains(&self.poll_interval_millis) {
+            return Err((
+                "invalid_poll_interval".to_string(),
+                format!(
+                    "poll_interval_millis 必须在 250~5000 毫秒之间，当前为 {}",
+                    self.poll_interval_millis
+                ),
+            ));
+        }
+
+        if !(300..=21600).contains(&self.health_reminder_threshold_secs) {
+            return Err((
+                "invalid_health_reminder_threshold".to_string(),
+                format!(
+                    "health_reminder_threshold_secs 必须在 300~21600 秒之间，当前为 {}",
+                    self.health_reminder_threshold_secs
+                ),
+            ));
+        }
+
         Ok(())
     }
 
@@ -93,8 +154,16 @@ impl AppConfig {
         }
 
         let content = toml::to_string_pretty(self).context("failed to serialize config")?;
-        std::fs::write(path, content)
-            .with_context(|| format!("failed to write config to {:?}", path))?;
+
+        // Atomic write: write to a temp file next to the target, then rename.
+        // On Windows, renaming over an existing file is atomic (NTFS); if the
+        // process crashes mid-write the temp file is left behind but the
+        // original config stays intact.
+        let temp_path = path.with_extension(format!("tmp.{}", std::process::id()));
+        std::fs::write(&temp_path, &content)
+            .with_context(|| format!("failed to write config to {:?}", temp_path))?;
+        std::fs::rename(&temp_path, path)
+            .with_context(|| format!("failed to rename {:?} -> {:?}", temp_path, path))?;
         Ok(())
     }
 
@@ -107,6 +176,42 @@ impl AppConfig {
         }
 
         self.web_ui_url.clone()
+    }
+
+    /// Returns the explicit list of browser origins allowed by CORS and the
+    /// origin-validation middleware. This replaces the previous "any loopback
+    /// origin" policy with a strict allowlist:
+    ///
+    /// - The agent's own origin (derived from `listen_addr`), on both the
+    ///   resolved host and `localhost`.
+    /// - The Vite dev server ports `4173` and `5173` on `127.0.0.1`,
+    ///   `localhost`, and `[::1]`.
+    ///
+    /// `chrome-extension://` origins are handled separately by the middleware
+    /// via the `X-Timeline-Extension` header and are NOT included here.
+    pub fn allowed_cors_origins(&self) -> Vec<String> {
+        let (host, port) = match self.listen_addr.rsplit_once(':') {
+            Some((host, port)) => (normalize_host(host), port.trim()),
+            None => ("127.0.0.1".to_string(), "46215"),
+        };
+
+        let mut origins = Vec::new();
+        // Same-origin: the agent's own address. Include both the resolved host
+        // and `localhost` so that `http://localhost:46215` works too.
+        origins.push(format!("http://{host}:{port}"));
+        if host != "localhost" {
+            origins.push(format!("http://localhost:{port}"));
+        }
+
+        // Dev server ports — Vite dev server runs on 4173 (this project) or
+        // 5173 (Vite default). Allow IPv4 loopback, localhost, and IPv6.
+        for dev_port in ["4173", "5173"] {
+            origins.push(format!("http://127.0.0.1:{dev_port}"));
+            origins.push(format!("http://localhost:{dev_port}"));
+            origins.push(format!("http://[::1]:{dev_port}"));
+        }
+
+        origins
     }
 
     /// Searches common locations for the built web-ui `dist/` directory.
@@ -138,6 +243,7 @@ impl AppConfig {
     fn resolve_relative_paths(&mut self, runtime_root: &Path) {
         self.database_path = resolve_path(runtime_root, &self.database_path);
         self.lockfile_path = resolve_path(runtime_root, &self.lockfile_path);
+        self.log_dir = resolve_path(runtime_root, &self.log_dir);
     }
 }
 

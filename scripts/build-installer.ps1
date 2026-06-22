@@ -167,14 +167,20 @@ Copy-Item -LiteralPath (Join-Path $repoRoot 'config\timeline.example.toml') -Des
 $defaultConfig = @'
 database_path = "../data/timeline.sqlite"
 lockfile_path = "../data/timeline.lock"
+log_dir = "../data/logs"
 listen_addr = "127.0.0.1:46215"
 web_ui_url = "http://127.0.0.1:46215/#/stats"
 idle_threshold_secs = 300
 poll_interval_millis = 1000
+health_reminder_enabled = true
+health_reminder_threshold_secs = 3000
 debug = false
 tray_enabled = true
 record_window_titles = true
 record_page_titles = true
+log_to_file = true
+log_retention_days = 7
+debug_events_enabled = false
 ignored_apps = []
 ignored_domains = []
 '@

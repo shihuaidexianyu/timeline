@@ -4,11 +4,11 @@ use crate::{config::AppConfig, db::AgentStore};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{
-    Arc,
+    Arc, RwLock,
     atomic::{AtomicBool, Ordering},
 };
 use time::{OffsetDateTime, UtcOffset};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{Mutex, RwLock as TokioRwLock};
 
 #[derive(Debug, Default)]
 pub struct RuntimeState {
@@ -92,8 +92,12 @@ pub struct AgentStateInner {
     pub config_path: Option<PathBuf>,
     pub store: AgentStore,
     pub started_at: OffsetDateTime,
-    pub timezone: UtcOffset,
-    pub runtime_config: RwLock<RuntimeConfigSnapshot>,
+    /// Local timezone offset, wrapped in a RwLock so it can be refreshed
+    /// periodically (DST changes, travel across timezones) without restarting.
+    /// Reads are non-blocking via `std::sync::RwLock` since the critical
+    /// section is just copying an `i32`-sized value.
+    pub timezone: RwLock<UtcOffset>,
+    pub runtime_config: TokioRwLock<RuntimeConfigSnapshot>,
     pub runtime: Mutex<RuntimeState>,
     pub browser_transition: Mutex<()>,
     pub monitors: Mutex<MonitorTelemetry>,
@@ -122,8 +126,8 @@ impl AgentState {
                 config_path,
                 store,
                 started_at,
-                timezone,
-                runtime_config: RwLock::new(runtime_config),
+                timezone: RwLock::new(timezone),
+                runtime_config: TokioRwLock::new(runtime_config),
                 runtime: Mutex::new(RuntimeState::default()),
                 browser_transition: Mutex::new(()),
                 monitors: Mutex::new(MonitorTelemetry::default()),
@@ -150,7 +154,24 @@ impl AgentState {
     }
 
     pub fn timezone(&self) -> UtcOffset {
-        self.inner.timezone
+        *self.inner.timezone.read().expect("timezone lock poisoned")
+    }
+
+    /// Re-reads the system local offset and updates the stored timezone if it
+    /// has changed (e.g. DST transition or travel across zones). Returns the
+    /// new offset and logs the change.
+    pub fn refresh_timezone(&self) -> UtcOffset {
+        let new_offset = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
+        let old_offset = {
+            let mut tz = self.inner.timezone.write().expect("timezone lock poisoned");
+            let old = *tz;
+            *tz = new_offset;
+            old
+        };
+        if old_offset != new_offset {
+            tracing::info!(old = %old_offset, new = %new_offset, "timezone offset changed");
+        }
+        new_offset
     }
 
     pub async fn runtime(&self) -> tokio::sync::MutexGuard<'_, RuntimeState> {
@@ -215,5 +236,11 @@ impl AgentState {
 
     pub fn shutdown_requested(&self) -> bool {
         self.inner.shutdown_requested.load(Ordering::SeqCst)
+    }
+
+    /// Returns a new `watch::Receiver` that fires when shutdown is requested.
+    /// Trackers use this to `select!` against their sleep loop and exit promptly.
+    pub fn shutdown_rx(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.inner.shutdown_tx.subscribe()
     }
 }

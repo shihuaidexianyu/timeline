@@ -15,8 +15,9 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::time::Duration;
 use time::OffsetDateTime;
+use tokio::sync::watch::Receiver;
 use tokio::time::sleep;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 pub fn spawn_trackers(state: AgentState) {
     let focus_state = state.clone();
@@ -40,7 +41,18 @@ pub fn spawn_trackers(state: AgentState) {
     });
 }
 
+/// Checks if shutdown has been requested via the watch channel. Returns `true`
+/// when the channel has received `true` (or the sender dropped). The receiver
+/// is borrowed mutably so that `changed()` can drain the pending update.
+async fn is_shutting_down(shutdown_rx: &mut Receiver<bool>) -> bool {
+    match shutdown_rx.has_changed() {
+        Ok(true) => *shutdown_rx.borrow(),
+        _ => false,
+    }
+}
+
 async fn run_focus_tracker(state: AgentState) -> Result<()> {
+    let mut shutdown_rx = state.shutdown_rx();
     loop {
         let runtime_config = state.runtime_config_snapshot().await;
         let observed_at = OffsetDateTime::now_utc();
@@ -57,11 +69,20 @@ async fn run_focus_tracker(state: AgentState) -> Result<()> {
             Err(error) => warn!(?error, "failed to read foreground window"),
         }
 
+        if is_shutting_down(&mut shutdown_rx).await {
+            info!("focus tracker shutting down, closing open segment");
+            close_open_focus_and_browser_segments(&state).await;
+            break;
+        }
+
         sleep(Duration::from_millis(runtime_config.poll_interval_millis)).await;
     }
+
+    Ok(())
 }
 
 async fn run_visible_window_tracker(state: AgentState) -> Result<()> {
+    let mut shutdown_rx = state.shutdown_rx();
     loop {
         let runtime_config = state.runtime_config_snapshot().await;
         let observed_at = OffsetDateTime::now_utc();
@@ -81,11 +102,20 @@ async fn run_visible_window_tracker(state: AgentState) -> Result<()> {
             Err(error) => warn!(?error, "failed to read visible windows"),
         }
 
+        if is_shutting_down(&mut shutdown_rx).await {
+            info!("visible window tracker shutting down, closing open segments");
+            close_open_visible_window_segments(&state).await;
+            break;
+        }
+
         sleep(Duration::from_millis(runtime_config.poll_interval_millis)).await;
     }
+
+    Ok(())
 }
 
 async fn run_presence_tracker(state: AgentState) -> Result<()> {
+    let mut shutdown_rx = state.shutdown_rx();
     loop {
         let runtime_config = state.runtime_config_snapshot().await;
         let observed_at = OffsetDateTime::now_utc();
@@ -108,7 +138,84 @@ async fn run_presence_tracker(state: AgentState) -> Result<()> {
         {
             warn!(?error, "failed to emit health reminder");
         }
+
+        if is_shutting_down(&mut shutdown_rx).await {
+            info!("presence tracker shutting down, closing open segment");
+            close_open_presence_segment(&state).await;
+            break;
+        }
+
         sleep(Duration::from_millis(runtime_config.poll_interval_millis)).await;
+    }
+
+    Ok(())
+}
+
+/// Closes the current focus segment and, if it was a browser, the current
+/// browser segment. Called on graceful shutdown so the segments have proper
+/// `ended_at` timestamps instead of relying on `restore_unclosed_segments`
+/// at next startup.
+async fn close_open_focus_and_browser_segments(state: &AgentState) {
+    let observed_at = OffsetDateTime::now_utc();
+    let previous_focus = {
+        let mut runtime = state.runtime().await;
+        runtime.current_focus.take()
+    };
+    if let Some(previous) = previous_focus
+        && let Err(error) = state
+            .store()
+            .end_focus_segment(previous.id, observed_at)
+            .await
+    {
+        warn!(?error, "failed to close focus segment on shutdown");
+    }
+
+    let previous_browser = {
+        let mut runtime = state.runtime().await;
+        runtime.current_browser.take()
+    };
+    if let Some(previous) = previous_browser
+        && let Err(error) = state
+            .store()
+            .end_browser_segment(previous.id, observed_at)
+            .await
+    {
+        warn!(?error, "failed to close browser segment on shutdown");
+    }
+}
+
+async fn close_open_visible_window_segments(state: &AgentState) {
+    let observed_at = OffsetDateTime::now_utc();
+    let open_windows: Vec<OpenVisibleWindowSegment> = {
+        let runtime = state.runtime().await;
+        runtime.current_visible_windows.values().cloned().collect()
+    };
+    for window in &open_windows {
+        if let Err(error) = state
+            .store()
+            .end_visible_window_segment(window.id, observed_at)
+            .await
+        {
+            warn!(?error, "failed to close visible window segment on shutdown");
+        }
+    }
+    let mut runtime = state.runtime().await;
+    runtime.current_visible_windows.clear();
+}
+
+async fn close_open_presence_segment(state: &AgentState) {
+    let observed_at = OffsetDateTime::now_utc();
+    let previous = {
+        let mut runtime = state.runtime().await;
+        runtime.current_presence.take()
+    };
+    if let Some(previous) = previous
+        && let Err(error) = state
+            .store()
+            .end_presence_segment(previous.id, observed_at)
+            .await
+    {
+        warn!(?error, "failed to close presence segment on shutdown");
     }
 }
 

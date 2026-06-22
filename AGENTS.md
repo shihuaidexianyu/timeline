@@ -178,7 +178,7 @@ npm run dev
 
 时间字段统一使用 RFC 3339 UTC 字符串。
 
-CORS 限制：浏览器请求 Origin 必须是 loopback（`127.0.0.1`、`localhost`、`::1`）。浏览器扩展需带上自定义请求头 `X-Timeline-Extension: browser-bridge`。`chrome-extension://` 来源仅在带有该请求头时被允许。
+CORS 限制：浏览器请求 Origin 必须是后端自身地址（由 `listen_addr` 派生）或 Vite 开发服务器端口（`4173`/`5173`）。不再允许任意 loopback Origin，防止其他本地 Web 应用读取数据。浏览器扩展需带上自定义请求头 `X-Timeline-Extension: browser-bridge`。`chrome-extension://` 来源仅在带有该请求头时被允许。
 
 主要端点：
 
@@ -190,7 +190,7 @@ CORS 限制：浏览器请求 Origin 必须是 loopback（`127.0.0.1`、`localho
 - `GET /api/stats/focus?date=YYYY-MM-DD`
 - `GET /api/stats/summary?date=YYYY-MM-DD`
 - `GET /api/calendar/month?month=YYYY-MM`
-- `GET /api/debug/recent-events`
+- `GET /api/debug/recent-events`（需 `debug_events_enabled = true`，默认关闭）
 - `GET /api/settings`
 - `POST /api/settings/config`
 - `POST /api/settings/autostart`
@@ -333,6 +333,10 @@ npm run test:e2e  # E2E 测试
 - `debug` — 是否启用 debug 级日志与线程名输出
 - `tray_enabled` — 是否启用系统托盘
 - `record_window_titles` / `record_page_titles` — 是否记录窗口/页面标题
+- `log_to_file` — 是否将日志写入文件（按天滚动），Release 构建无控制台，建议保持开启
+- `log_dir` — 日志文件目录（相对路径按配置文件所在目录解析）
+- `log_retention_days` — 日志文件保留天数，0 表示永不清理
+- `debug_events_enabled` — 是否开启 `/api/debug/recent-events` 端点，默认关闭
 - `ignored_apps` / `ignored_domains` — 忽略列表
 
 配置文件内的相对路径按“配置文件所在目录”解析。

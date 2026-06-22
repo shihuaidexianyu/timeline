@@ -39,6 +39,7 @@ use winrt_notification::{Duration as ToastDuration, Sound, Toast};
 const AUTOSTART_REG_PATH: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const AUTOSTART_VALUE_NAME: &str = "Timeline";
 const MENU_OPEN_ID: &str = "open";
+const MENU_LOGS_ID: &str = "logs";
 const MENU_QUIT_ID: &str = "quit";
 const BREAK_REMINDER_TITLE: &str = "Timeline 健康提醒";
 pub const TOAST_APP_USER_MODEL_ID: &str = "com.timeline";
@@ -137,6 +138,52 @@ pub fn open_frontend(url: &str) -> Result<()> {
     // ShellExecuteW returns a pseudo-HINSTANCE; values <= 32 indicate failure.
     if result.0 as usize <= 32 {
         anyhow::bail!("ShellExecuteW failed with code {}", result.0 as usize);
+    }
+
+    Ok(())
+}
+
+/// Opens a folder in Windows Explorer. Falls back to `explorer.exe` if the
+/// default `open` verb is not registered for directories.
+pub fn open_folder(path: &Path) -> Result<()> {
+    if !path.is_dir() {
+        anyhow::bail!("log directory does not exist: {}", path.display());
+    }
+
+    let operation = to_wide("explore");
+    let target = to_wide_os(path.as_os_str());
+
+    let result = unsafe {
+        ShellExecuteW(
+            Some(HWND::default()),
+            windows::core::PCWSTR(operation.as_ptr()),
+            windows::core::PCWSTR(target.as_ptr()),
+            windows::core::PCWSTR::null(),
+            windows::core::PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+
+    if result.0 as usize <= 32 {
+        // Retry with the `open` verb which also works for directories on most systems.
+        let operation = to_wide("open");
+        let result = unsafe {
+            ShellExecuteW(
+                Some(HWND::default()),
+                windows::core::PCWSTR(operation.as_ptr()),
+                windows::core::PCWSTR(target.as_ptr()),
+                windows::core::PCWSTR::null(),
+                windows::core::PCWSTR::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if result.0 as usize <= 32 {
+            anyhow::bail!(
+                "ShellExecuteW failed to open folder {} with code {}",
+                path.display(),
+                result.0 as usize
+            );
+        }
     }
 
     Ok(())
@@ -273,7 +320,10 @@ pub fn show_break_reminder(streak_secs: i64) {
     let active_minutes = ((streak_secs + 59) / 60).max(1);
     let message = format!("你已连续活跃约 {active_minutes} 分钟，建议起身活动 3-5 分钟。");
 
-    std::thread::spawn(move || {
+    // Use `spawn_blocking` instead of `std::thread::spawn` so the toast
+    // runs on the tokio blocking thread pool rather than creating a new
+    // OS thread each time. Both call sites are within the tokio runtime.
+    tokio::task::spawn_blocking(move || {
         if let Err(error) = show_break_reminder_toast(BREAK_REMINDER_TITLE, &message) {
             warn!(
                 ?error,
@@ -357,6 +407,7 @@ fn run_tray_loop(state: AgentState) -> Result<()> {
     let tray_menu = build_tray_menu();
     let tray_icon = build_tray_icon(&state).context("failed to build tray icon image")?;
     let open_id = MenuId::new(MENU_OPEN_ID);
+    let logs_id = MenuId::new(MENU_LOGS_ID);
     let quit_id = MenuId::new(MENU_QUIT_ID);
 
     let proxy = event_loop.create_proxy();
@@ -421,6 +472,11 @@ fn run_tray_loop(state: AgentState) -> Result<()> {
                     {
                         warn!(?error, "failed to open frontend from tray menu");
                     }
+                } else if menu_event.id == logs_id {
+                    let log_dir = state_for_loop.config().log_dir.clone();
+                    if let Err(error) = open_folder(&log_dir) {
+                        warn!(?error, ?log_dir, "failed to open log dir from tray menu");
+                    }
                 } else if menu_event.id == quit_id {
                     state_for_loop.request_shutdown();
                     *control_flow = ControlFlow::Exit;
@@ -434,9 +490,12 @@ fn run_tray_loop(state: AgentState) -> Result<()> {
 fn build_tray_menu() -> Menu {
     let menu = Menu::new();
     let open_item = MenuItem::with_id(MENU_OPEN_ID, "打开时间线", true, None::<Accelerator>);
+    let logs_item = MenuItem::with_id(MENU_LOGS_ID, "打开日志目录", true, None::<Accelerator>);
     let quit_item = MenuItem::with_id(MENU_QUIT_ID, "退出", true, None::<Accelerator>);
     menu.append(&open_item)
         .expect("failed to append open menu item");
+    menu.append(&logs_item)
+        .expect("failed to append logs menu item");
     menu.append(&PredefinedMenuItem::separator())
         .expect("failed to append tray separator");
     menu.append(&quit_item)

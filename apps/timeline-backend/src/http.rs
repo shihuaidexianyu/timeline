@@ -20,7 +20,7 @@ use common::{
 use serde::Deserialize;
 use time::format_description::parse;
 use time::{Date, Duration, OffsetDateTime};
-use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 
 const EXTENSION_HEADER: &str = "x-timeline-extension";
@@ -29,7 +29,13 @@ const EXTENSION_HEADER_VALUE: &str = "browser-bridge";
 const DEBUG_RECENT_EVENTS_LIMIT: i64 = 30;
 
 pub fn build_router(state: AgentState) -> Router {
-    let router = Router::new()
+    let allowed_origins = state.config().allowed_cors_origins();
+
+    // All routes must be registered before `with_state` so that the state type
+    // inference works correctly. The debug endpoint is conditionally included
+    // based on `debug_events_enabled` (defaults to off — it exposes window titles
+    // and other sensitive raw data).
+    let mut routes = Router::new()
         .route("/health", get(get_health))
         .route("/api/timeline/day", get(get_timeline_day))
         .route("/api/stats/apps", get(get_app_stats))
@@ -39,12 +45,20 @@ pub fn build_router(state: AgentState) -> Router {
         .route("/api/settings", get(get_settings))
         .route("/api/settings/autostart", post(post_autostart))
         .route("/api/settings/config", post(post_update_agent_config))
-        .route("/api/debug/recent-events", get(get_recent_events))
         .route("/api/events/browser", post(post_browser_event))
         .route("/api/calendar/month", get(get_month_calendar))
-        .route("/api/stats/summary", get(get_period_summary))
-        .layer(middleware::from_fn(validate_request_origin))
-        .layer(build_cors_layer())
+        .route("/api/stats/summary", get(get_period_summary));
+
+    if state.config().debug_events_enabled {
+        routes = routes.route("/api/debug/recent-events", get(get_recent_events));
+    }
+
+    let router = routes
+        .layer(middleware::from_fn_with_state(
+            allowed_origins,
+            validate_request_origin,
+        ))
+        .layer(build_cors_layer(&state.config().allowed_cors_origins()))
         .with_state(state.clone());
 
     if let Some(dist_dir) = state.config().web_ui_dist_dir() {
@@ -76,11 +90,21 @@ struct AppTrendQuery {
 async fn get_health(
     State(state): State<AgentState>,
 ) -> Result<Json<ApiResponse<HealthResponse>>, AppError> {
+    // Only expose the database file name (not the full path) to avoid leaking
+    // the user's directory structure to any local web page that can reach /health.
+    let database_file_name = state
+        .config()
+        .database_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("timeline.sqlite")
+        .to_string();
+
     Ok(Json(ApiResponse::ok(HealthResponse {
         service: "timeline".to_string(),
         status: "ok".to_string(),
         started_at: state.started_at(),
-        database_path: state.config().database_path.display().to_string(),
+        database_path: database_file_name,
         listen_addr: state.config().listen_addr.clone(),
         timezone: state.timezone().to_string(),
     })))
@@ -198,8 +222,6 @@ async fn post_update_agent_config(
     State(state): State<AgentState>,
     Json(payload): Json<UpdateAgentConfigRequest>,
 ) -> Result<Json<ApiResponse<UpdateAgentConfigResponse>>, AppError> {
-    validate_agent_config_payload(&payload)?;
-
     let mut next = state.config().clone();
     next.idle_threshold_secs = payload.idle_threshold_secs;
     next.poll_interval_millis = payload.poll_interval_millis;
@@ -209,6 +231,9 @@ async fn post_update_agent_config(
     next.record_page_titles = payload.record_page_titles;
     next.ignored_apps = sanitize_list(payload.ignored_apps);
     next.ignored_domains = sanitize_list(payload.ignored_domains);
+
+    next.validate()
+        .map_err(|(code, message)| AppError::bad_request(code, message))?;
 
     let Some(config_path) = state.config_path() else {
         return Err(AppError::bad_request(
@@ -335,18 +360,25 @@ fn parse_or_current_month(
     Ok((now.year(), now.month()))
 }
 
-fn build_cors_layer() -> CorsLayer {
+fn build_cors_layer(allowed_origins: &[String]) -> CorsLayer {
+    let origins: Vec<HeaderValue> = allowed_origins
+        .iter()
+        .filter_map(|origin| HeaderValue::from_str(origin).ok())
+        .collect();
+
     CorsLayer::new()
-        .allow_origin(AllowOrigin::predicate(|origin, _request_parts| {
-            is_allowed_loopback_origin(origin)
-        }))
+        .allow_origin(origins)
         .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
         .allow_headers([CONTENT_TYPE, HeaderName::from_static(EXTENSION_HEADER)])
 }
 
-async fn validate_request_origin(request: Request, next: Next) -> Response {
+async fn validate_request_origin(
+    State(allowed_origins): State<Vec<String>>,
+    request: Request,
+    next: Next,
+) -> Response {
     if let Some(origin) = request.headers().get(ORIGIN)
-        && !is_allowed_browser_origin(origin, request.headers())
+        && !is_allowed_browser_origin(origin, request.headers(), &allowed_origins)
     {
         return (
             StatusCode::FORBIDDEN,
@@ -361,8 +393,12 @@ async fn validate_request_origin(request: Request, next: Next) -> Response {
     next.run(request).await
 }
 
-fn is_allowed_browser_origin(origin: &HeaderValue, headers: &axum::http::HeaderMap) -> bool {
-    if is_allowed_loopback_origin(origin) {
+fn is_allowed_browser_origin(
+    origin: &HeaderValue,
+    headers: &axum::http::HeaderMap,
+    allowed_origins: &[String],
+) -> bool {
+    if is_in_allowed_origins(origin, allowed_origins) {
         return true;
     }
 
@@ -384,33 +420,14 @@ fn has_extension_header(headers: &HeaderMap) -> bool {
         == Some(EXTENSION_HEADER_VALUE)
 }
 
-fn is_allowed_loopback_origin(origin: &HeaderValue) -> bool {
-    let Ok(origin) = origin.to_str() else {
+/// Checks if the request origin matches one of the explicitly allowed origins.
+/// This replaces the previous "any loopback origin" predicate with a strict
+/// allowlist to prevent other local web applications from reading the API.
+fn is_in_allowed_origins(origin: &HeaderValue, allowed_origins: &[String]) -> bool {
+    let Ok(origin_str) = origin.to_str() else {
         return false;
     };
-
-    let Some((scheme, rest)) = origin.split_once("://") else {
-        return false;
-    };
-
-    if scheme != "http" && scheme != "https" {
-        return false;
-    }
-
-    let authority = rest.split('/').next().unwrap_or(rest);
-    let host = extract_host(authority);
-
-    matches!(host, Some("127.0.0.1" | "localhost" | "::1"))
-}
-
-/// Extracts the host portion from an authority string, stripping the port
-/// and IPv6 brackets (e.g. `[::1]:5173` → `::1`, `127.0.0.1:46215` → `127.0.0.1`).
-fn extract_host(authority: &str) -> Option<&str> {
-    if let Some(remainder) = authority.strip_prefix('[') {
-        return remainder.split_once(']').map(|(host, _)| host);
-    }
-
-    Some(authority.split(':').next().unwrap_or(authority))
+    allowed_origins.iter().any(|allowed| allowed == origin_str)
 }
 
 async fn frontend_not_built() -> impl IntoResponse {
@@ -505,31 +522,6 @@ fn monitor_status(
     }
 }
 
-fn validate_agent_config_payload(payload: &UpdateAgentConfigRequest) -> Result<(), AppError> {
-    if !(15..=1800).contains(&payload.idle_threshold_secs) {
-        return Err(AppError::bad_request(
-            "invalid_idle_threshold",
-            "idle_threshold_secs must be between 15 and 1800 seconds",
-        ));
-    }
-
-    if !(250..=5000).contains(&payload.poll_interval_millis) {
-        return Err(AppError::bad_request(
-            "invalid_poll_interval",
-            "poll_interval_millis must be between 250 and 5000 milliseconds",
-        ));
-    }
-
-    if !(300..=21600).contains(&payload.health_reminder_threshold_secs) {
-        return Err(AppError::bad_request(
-            "invalid_health_reminder_threshold",
-            "health_reminder_threshold_secs must be between 300 and 21600 seconds",
-        ));
-    }
-
-    Ok(())
-}
-
 fn sanitize_list(items: Vec<String>) -> Vec<String> {
     let mut values: Vec<String> = items
         .into_iter()
@@ -545,23 +537,23 @@ fn sanitize_list(items: Vec<String>) -> Vec<String> {
 #[derive(Debug)]
 struct AppError {
     status: StatusCode,
-    code: &'static str,
+    code: String,
     message: String,
 }
 
 impl AppError {
-    fn bad_request(code: &'static str, message: impl Into<String>) -> Self {
+    fn bad_request(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
-            code,
+            code: code.into(),
             message: message.into(),
         }
     }
 
-    fn forbidden(code: &'static str, message: impl Into<String>) -> Self {
+    fn forbidden(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::FORBIDDEN,
-            code,
+            code: code.into(),
             message: message.into(),
         }
     }
@@ -569,7 +561,7 @@ impl AppError {
     fn internal(error: anyhow::Error) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
-            code: "internal_error",
+            code: "internal_error".to_string(),
             message: error.to_string(),
         }
     }
@@ -589,7 +581,7 @@ impl IntoResponse for AppError {
                 ok: false,
                 data: None,
                 error: Some(common::ApiErrorBody {
-                    code: self.code.to_string(),
+                    code: self.code,
                     message: self.message,
                 }),
             }),
@@ -602,36 +594,59 @@ impl IntoResponse for AppError {
 mod tests {
     use super::{
         EXTENSION_HEADER, EXTENSION_HEADER_VALUE, has_extension_header, is_allowed_browser_origin,
-        is_allowed_loopback_origin, parse_usage_metric,
+        is_in_allowed_origins, parse_usage_metric,
     };
     use axum::http::{HeaderMap, HeaderValue};
     use common::UsageMetric;
 
-    #[test]
-    fn allows_loopback_http_origins() {
-        assert!(is_allowed_loopback_origin(&HeaderValue::from_static(
-            "http://127.0.0.1:4173"
-        )));
-        assert!(is_allowed_loopback_origin(&HeaderValue::from_static(
-            "http://localhost:46215"
-        )));
-        assert!(is_allowed_loopback_origin(&HeaderValue::from_static(
-            "http://[::1]:5173"
-        )));
+    fn default_allowed_origins() -> Vec<String> {
+        vec![
+            "http://127.0.0.1:46215".to_string(),
+            "http://localhost:46215".to_string(),
+            "http://127.0.0.1:4173".to_string(),
+            "http://localhost:4173".to_string(),
+            "http://[::1]:4173".to_string(),
+            "http://127.0.0.1:5173".to_string(),
+            "http://localhost:5173".to_string(),
+            "http://[::1]:5173".to_string(),
+        ]
     }
 
     #[test]
-    fn rejects_non_loopback_origins() {
-        assert!(!is_allowed_loopback_origin(&HeaderValue::from_static(
-            "https://example.com"
-        )));
-        assert!(!is_allowed_loopback_origin(&HeaderValue::from_static(
-            "chrome-extension://abc123"
-        )));
+    fn allows_same_origin_and_dev_ports() {
+        let allowed = default_allowed_origins();
+        assert!(is_in_allowed_origins(
+            &HeaderValue::from_static("http://127.0.0.1:46215"),
+            &allowed,
+        ));
+        assert!(is_in_allowed_origins(
+            &HeaderValue::from_static("http://localhost:4173"),
+            &allowed,
+        ));
+        assert!(is_in_allowed_origins(
+            &HeaderValue::from_static("http://[::1]:5173"),
+            &allowed,
+        ));
+    }
+
+    #[test]
+    fn rejects_unlisted_loopback_origins() {
+        let allowed = default_allowed_origins();
+        // A random loopback port that is not in the allowlist.
+        assert!(!is_in_allowed_origins(
+            &HeaderValue::from_static("http://127.0.0.1:8888"),
+            &allowed,
+        ));
+        // Non-loopback origins are never allowed.
+        assert!(!is_in_allowed_origins(
+            &HeaderValue::from_static("https://example.com"),
+            &allowed,
+        ));
     }
 
     #[test]
     fn allows_chrome_extension_origin_with_extension_header() {
+        let allowed = default_allowed_origins();
         let mut headers = HeaderMap::new();
         headers.insert(
             EXTENSION_HEADER,
@@ -641,14 +656,17 @@ mod tests {
         assert!(is_allowed_browser_origin(
             &HeaderValue::from_static("chrome-extension://abc123"),
             &headers,
+            &allowed,
         ));
     }
 
     #[test]
     fn rejects_chrome_extension_origin_without_extension_header() {
+        let allowed = default_allowed_origins();
         assert!(!is_allowed_browser_origin(
             &HeaderValue::from_static("chrome-extension://abc123"),
             &HeaderMap::new(),
+            &allowed,
         ));
     }
 

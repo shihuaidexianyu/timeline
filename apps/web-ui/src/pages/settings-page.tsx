@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import {
   API_BASE_URL,
+  useAgentSettingsQuery,
+  useUpdateAgentConfigMutation,
+  useUpdateAutostartMutation,
   type AgentMonitorStatus,
   type AgentSettingsResponse,
   type UpdateAgentConfigRequest,
@@ -13,24 +16,65 @@ import {
 } from '../features/settings/settings-form'
 import type { ThemeMode } from '../hooks/use-theme'
 import { RefreshBadge } from '../shared/ui'
+import type { SharedData } from '../app/use-shared-data'
 
 export function SettingsPage(props: {
-  agentSettings: AgentSettingsResponse | null
-  loading: boolean
-  error: string | null
-  settingsError: string | null
-  settingsNotice: string | null
-  lastUpdatedAt: string | null
-  selectedDate: string
-  timezone: string
-  savingAutostart: boolean
-  savingConfig: boolean
-  isSettingsRefreshing: boolean
+  shared: SharedData
   theme: ThemeMode
   onChangeTheme: (theme: ThemeMode) => void
-  onToggleAutostart: (enabled: boolean) => Promise<void>
-  onUpdateConfig: (payload: UpdateAgentConfigRequest) => Promise<void>
 }) {
+  const settingsQuery = useAgentSettingsQuery()
+  const updateConfigMutation = useUpdateAgentConfigMutation()
+  const updateAutostartMutation = useUpdateAutostartMutation()
+  const [settingsError, setSettingsError] = useState<string | null>(null)
+  const [settingsNotice, setSettingsNotice] = useState<string | null>(null)
+
+  const agentSettings = settingsQuery.data ?? null
+  const loading = !settingsQuery.data && settingsQuery.isPending
+  const error = settingsQuery.error instanceof Error
+    ? settingsQuery.error.message
+    : settingsQuery.error
+      ? '设置加载失败'
+      : null
+  const savingAutostart = updateAutostartMutation.isPending
+  const savingConfig = updateConfigMutation.isPending
+  const isSettingsRefreshing = settingsQuery.isFetching && Boolean(settingsQuery.data)
+  const selectedDate = props.shared.resolvedSelectedDate
+  const timezone = props.shared.resolvedTimezone
+  const lastUpdatedAt = props.shared.lastTimelineDataUpdatedAt > 0
+    ? new Date(props.shared.lastTimelineDataUpdatedAt).toLocaleTimeString()
+    : null
+
+  const onToggleAutostart = async (enabled: boolean) => {
+    setSettingsError(null)
+    setSettingsNotice(null)
+    try {
+      await updateAutostartMutation.mutateAsync({ enabled })
+    } catch (toggleError) {
+      setSettingsError(
+        toggleError instanceof Error ? toggleError.message : '更新开机自启动设置失败',
+      )
+    }
+  }
+
+  const onUpdateConfig = async (payload: UpdateAgentConfigRequest) => {
+    setSettingsError(null)
+    setSettingsNotice(null)
+    try {
+      const result = await updateConfigMutation.mutateAsync(payload)
+      if (result.saved) {
+        setSettingsNotice(
+          result.requires_restart
+            ? '设置已保存，重启 timeline 后生效。'
+            : null,
+        )
+      }
+    } catch (updateError) {
+      setSettingsError(
+        updateError instanceof Error ? updateError.message : '更新本地配置失败',
+      )
+    }
+  }
   return (
     <section className="page-stack settings-page">
       <h1 className="page-title">设置</h1>
@@ -77,9 +121,9 @@ export function SettingsPage(props: {
                   <div className="settings-winui-card-title">连接信息</div>
                   <div className="settings-winui-card-subtitle">当前与本地 timeline 服务的连接状态</div>
                 </div>
-                <RefreshBadge active={props.isSettingsRefreshing} />
+                <RefreshBadge active={isSettingsRefreshing} />
               </div>
-              {props.loading ? <SettingsListSkeleton rows={5} /> : (
+              {loading ? <SettingsListSkeleton rows={5} /> : (
                 <dl className="settings-winui-list">
                   <div>
                     <dt>接口地址</dt>
@@ -87,22 +131,22 @@ export function SettingsPage(props: {
                   </div>
                   <div>
                     <dt>前端地址</dt>
-                    <dd className="settings-winui-mono">{props.agentSettings?.web_ui_url ?? '--'}</dd>
+                    <dd className="settings-winui-mono">{agentSettings?.web_ui_url ?? '--'}</dd>
                   </div>
                   <div>
                     <dt>连接状态</dt>
                     <dd>
-                      <span className={`settings-status-dot ${props.error ? 'is-offline' : 'is-online'}`} />
-                      {props.error ? '离线' : '在线'}
+                      <span className={`settings-status-dot ${error ? 'is-offline' : 'is-online'}`} />
+                      {error ? '离线' : '在线'}
                     </dd>
                   </div>
                   <div>
                     <dt>最后更新</dt>
-                    <dd className="settings-winui-mono">{props.lastUpdatedAt ?? '等待连接'}</dd>
+                    <dd className="settings-winui-mono">{lastUpdatedAt ?? '等待连接'}</dd>
                   </div>
                   <div>
                     <dt>启动命令</dt>
-                    <dd className="settings-winui-mono">{props.agentSettings?.launch_command ?? '--'}</dd>
+                    <dd className="settings-winui-mono">{agentSettings?.launch_command ?? '--'}</dd>
                   </div>
                 </dl>
               )}
@@ -117,7 +161,7 @@ export function SettingsPage(props: {
                 <div>
                   <div className="settings-winui-card-title">导出当日数据</div>
                   <div className="settings-winui-card-subtitle">
-                    导出 {props.selectedDate} 的完整 segment 数据为 CSV 或 JSON 文件
+                    导出 {selectedDate} 的完整 segment 数据为 CSV 或 JSON 文件
                   </div>
                 </div>
               </div>
@@ -127,15 +171,15 @@ export function SettingsPage(props: {
                   <div className="ui-segmented" role="group" aria-label="导出格式">
                     <a
                       className="ui-segmented-item"
-                      href={`${API_BASE_URL}/api/export?date=${props.selectedDate}&format=csv`}
-                      download={`timeline-${props.selectedDate}.csv`}
+                      href={`${API_BASE_URL}/api/export?date=${selectedDate}&format=csv`}
+                      download={`timeline-${selectedDate}.csv`}
                     >
                       CSV
                     </a>
                     <a
                       className="ui-segmented-item"
-                      href={`${API_BASE_URL}/api/export?date=${props.selectedDate}&format=json`}
-                      download={`timeline-${props.selectedDate}.json`}
+                      href={`${API_BASE_URL}/api/export?date=${selectedDate}&format=json`}
+                      download={`timeline-${selectedDate}.json`}
                     >
                       JSON
                     </a>
@@ -169,7 +213,7 @@ export function SettingsPage(props: {
           <section className="settings-winui-section">
             <h3 className="settings-winui-section-title">启动与采集</h3>
             <div className="settings-winui-card">
-              {props.loading || !props.agentSettings ? (
+              {loading || !agentSettings ? (
                 <SettingsConfigSkeleton />
               ) : (
                 <>
@@ -180,10 +224,10 @@ export function SettingsPage(props: {
                     </div>
                     <div className="settings-winui-row-control">
                       <ToggleSwitch
-                        checked={props.agentSettings.autostart_enabled}
-                        saving={props.savingAutostart}
+                        checked={agentSettings.autostart_enabled}
+                        saving={savingAutostart}
                         onToggle={() => {
-                          void props.onToggleAutostart(!props.agentSettings!.autostart_enabled)
+                          void onToggleAutostart(!agentSettings!.autostart_enabled)
                         }}
                       />
                     </div>
@@ -194,7 +238,7 @@ export function SettingsPage(props: {
                     <div className="settings-winui-row-desc">在系统托盘显示图标和菜单</div>
                     <div className="settings-winui-row-control">
                       <span className="settings-winui-value">
-                        {props.agentSettings.tray_enabled ? '已启用' : '已禁用'}
+                        {agentSettings.tray_enabled ? '已启用' : '已禁用'}
                       </span>
                     </div>
                   </div>
@@ -203,7 +247,7 @@ export function SettingsPage(props: {
                     <div className="settings-winui-row-label">当前日期</div>
                     <div className="settings-winui-row-desc">统计和趋势页面当前选中的日期</div>
                     <div className="settings-winui-row-control">
-                      <span className="settings-winui-value">{props.selectedDate}</span>
+                      <span className="settings-winui-value">{selectedDate}</span>
                     </div>
                   </div>
                   <div className="settings-winui-divider" />
@@ -211,23 +255,23 @@ export function SettingsPage(props: {
                     <div className="settings-winui-row-label">系统时区</div>
                     <div className="settings-winui-row-desc">本地时间显示使用的时区</div>
                     <div className="settings-winui-row-control">
-                      <span className="settings-winui-value">{props.timezone}</span>
+                      <span className="settings-winui-value">{timezone}</span>
                     </div>
                   </div>
 
                   <div className="settings-winui-divider is-section" />
 
                   <SettingsConfigForm
-                    key={settingsFormKey(props.agentSettings)}
-                    settings={props.agentSettings}
-                    savingConfig={props.savingConfig}
-                    onUpdateConfig={props.onUpdateConfig}
+                    key={settingsFormKey(agentSettings)}
+                    settings={agentSettings}
+                    savingConfig={savingConfig}
+                    onUpdateConfig={onUpdateConfig}
                   />
                 </>
               )}
 
-              {!props.loading && props.settingsError ? <div className="settings-error">{props.settingsError}</div> : null}
-              {!props.loading && props.settingsNotice ? <div className="settings-notice">{props.settingsNotice}</div> : null}
+                    {!loading && settingsError ? <div className="settings-error">{settingsError}</div> : null}
+                    {!loading && settingsNotice ? <div className="settings-notice">{settingsNotice}</div> : null}
             </div>
           </section>
         </div>
@@ -237,10 +281,10 @@ export function SettingsPage(props: {
           <section className="settings-winui-section">
             <h3 className="settings-winui-section-title">监视器</h3>
             <div className="settings-winui-card">
-              {props.loading ? (
+              {loading ? (
                 <MonitorListSkeleton />
               ) : (
-                <MonitorStatusPanel monitors={props.agentSettings?.monitors ?? []} />
+                <MonitorStatusPanel monitors={agentSettings?.monitors ?? []} />
               )}
             </div>
           </section>

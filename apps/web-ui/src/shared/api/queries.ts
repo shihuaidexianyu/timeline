@@ -8,6 +8,7 @@ import {
   getAgentSettings,
   getAppStats,
   getAppUsageTrend,
+  getDomainUsageTrend,
   getMonthCalendar,
   getPeriodSummary,
   getTimeline,
@@ -33,6 +34,11 @@ export const apiQueryKeys = {
     metric: UsageMetric,
     limit: number,
   ) => ['app-usage-trend', date ?? 'none', period, metric, limit] as const,
+  domainUsageTrend: (
+    date: string | null | undefined,
+    period: TrendPeriod,
+    limit: number,
+  ) => ['domain-usage-trend', date ?? 'none', period, limit] as const,
   appStats: (date: string | null | undefined, metric: UsageMetric) =>
     ['app-stats', date ?? 'none', metric] as const,
   monthCalendar: (month: string | null | undefined) =>
@@ -79,14 +85,31 @@ export function useAppUsageTrendQuery(
 ) {
   const { enabled, ...queryOptions } = options ?? {}
 
-  return useQuery({
-    queryKey: apiQueryKeys.appUsageTrend(date, period, metric, limit),
-    queryFn: ({ signal }) => getAppUsageTrend(date ?? '', period, metric, limit, signal),
-    enabled: Boolean(date) && (enabled ?? true),
-    placeholderData: keepPreviousData,
-    ...queryOptions,
-  })
-}
+    return useQuery({
+      queryKey: apiQueryKeys.appUsageTrend(date, period, metric, limit),
+      queryFn: ({ signal }) => getAppUsageTrend(date ?? '', period, metric, limit, signal),
+      enabled: Boolean(date) && (enabled ?? true),
+      placeholderData: keepPreviousData,
+      ...queryOptions,
+    })
+  }
+
+  export function useDomainUsageTrendQuery(
+    date: string | null | undefined,
+    period: TrendPeriod,
+    limit = 6,
+    options?: QueryHookOptions,
+  ) {
+    const { enabled, ...queryOptions } = options ?? {}
+
+    return useQuery({
+      queryKey: apiQueryKeys.domainUsageTrend(date, period, limit),
+      queryFn: ({ signal }) => getDomainUsageTrend(date ?? '', period, limit, signal),
+      enabled: Boolean(date) && (enabled ?? true),
+      placeholderData: keepPreviousData,
+      ...queryOptions,
+    })
+  }
 
 export function useAppStatsQuery(
   date: string | null | undefined,

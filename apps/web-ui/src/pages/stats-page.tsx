@@ -1,9 +1,9 @@
-import { lazy, Suspense, useState } from 'react'
+import { lazy, Suspense, useMemo, useState } from 'react'
 import type {
-    DaySummary,
     PeriodSummaryResponse,
     UsageMetric,
 } from '../api'
+import { useAppStatsQuery, useMonthCalendarQuery } from '../shared/api'
 import { CalendarGrid } from '../components/calendar-grid'
 import { ChartLazyFallback } from '../components/chart-lazy-fallback'
 import {
@@ -16,12 +16,19 @@ import {
 import { ErrorBoundary, ErrorCard, RefreshBadge } from '../shared/ui'
 import {
     formatDuration,
+    durationStatsToDonutSlices,
     presenceColor,
     type DashboardFilter,
     type DashboardModel,
     type DonutSlice,
 } from '../lib/chart-model'
-import type { WeekBarDatum } from '../lib/dashboard-helpers'
+import {
+    buildWeekSeries,
+    isValidDateKey,
+    monthFromDate,
+    type WeekBarDatum,
+} from '../lib/dashboard-helpers'
+import type { SharedData } from '../app/use-shared-data'
 export type { WeekBarDatum } from '../lib/dashboard-helpers'
 
 const LazyDonutChart = lazy(() =>
@@ -43,46 +50,64 @@ const LazyDayUsageView = lazy(() =>
 )
 
 export function StatsPage(props: {
-    dashboard: DashboardModel | null
-    loading: boolean
+    shared: SharedData
+    appUsageMetric: UsageMetric
     appFilter: DashboardFilter
     domainFilter: DashboardFilter
     setAppFilter: (value: DashboardFilter) => void
     setDomainFilter: (value: DashboardFilter) => void
-    periodSummary: PeriodSummaryResponse | null
-    appUsageMetric: UsageMetric
-    appStats: DonutSlice[]
-    appStatsTotalSeconds: number
-    calendarDays: DaySummary[]
-    calendarMonth: string
-    selectedDate: string
-    agentToday: string | null
-    calendarError: string | null
-    weekBars: WeekBarDatum[]
-    isTimelineRefreshing: boolean
-    isPeriodRefreshing: boolean
-    isAppStatsRefreshing: boolean
-    isCalendarRefreshing: boolean
-    appStatsError: string | null
-    onRetryAppStats?: () => void
-    onRetryCalendar?: () => void
-    onCalendarMonthChange: (month: string) => void
     onSelectDate: (date: string) => void
+    onCalendarMonthChange: (month: string) => void
 }) {
+    const { shared, appUsageMetric } = props
+    const dashboard = shared.dashboard
+    const selectedDate = shared.resolvedSelectedDate
+    const periodSummary = shared.selectedPeriodSummary ?? null
+    const loading = !shared.hasDashboard
+
+    // Page-specific queries: only fetched when this page is mounted.
+    const calendarMonth = shared.dateState.calendarMonth ?? monthFromDate(selectedDate)
+    const calendarQuery = useMonthCalendarQuery(calendarMonth)
+    const appStatsDate = shared.dateState.selectedDate ?? shared.timelineQuery.data?.date ?? null
+    const appStatsQuery = useAppStatsQuery(appStatsDate ?? '', appUsageMetric, {
+        enabled: appStatsDate !== null,
+    })
+
+    const appStatSlices = useMemo(
+        () => durationStatsToDonutSlices(appStatsQuery.data ?? [], 'app'),
+        [appStatsQuery.data],
+    )
+    const appStatTotalSeconds = useMemo(
+        () => (appStatsQuery.data ?? []).reduce((sum, item) => sum + item.seconds, 0),
+        [appStatsQuery.data],
+    )
+    const weekBars = useMemo(
+        () =>
+            isValidDateKey(selectedDate)
+                ? buildWeekSeries(calendarQuery.data?.days ?? [], selectedDate)
+                : [],
+        [calendarQuery.data?.days, selectedDate],
+    )
+
     const presenceByKey = new Map(
-        (props.dashboard?.presenceSlices ?? []).map((slice) => [slice.key, slice.value]),
+        (dashboard?.presenceSlices ?? []).map((slice) => [slice.key, slice.value]),
     )
     const appDistributionLoading =
-        props.loading || (props.isAppStatsRefreshing && props.appStats.length === 0)
+        loading || (appStatsQuery.isFetching && appStatSlices.length === 0)
+    const appStatSlicesError = appStatsQuery.error instanceof Error
+        ? appStatsQuery.error.message
+        : appStatsQuery.error
+            ? '应用统计数据加载失败'
+            : null
 
     // First-run guidance: when data has loaded but is completely empty (no
     // focus/presence/visible-window segments), show a welcome card instead of
     // empty charts so the user knows the agent is working.
     const isEmpty =
-        !props.loading &&
-        (props.dashboard?.summary.focusSeconds ?? 0) === 0 &&
-        (props.dashboard?.summary.activeSeconds ?? 0) === 0 &&
-        (props.calendarDays ?? []).every(
+        !loading &&
+        (dashboard?.summary.focusSeconds ?? 0) === 0 &&
+        (dashboard?.summary.activeSeconds ?? 0) === 0 &&
+        (calendarQuery.data?.days ?? []).every(
             (day) => day.focus_seconds === 0 && day.active_seconds === 0,
         )
 
@@ -104,19 +129,19 @@ export function StatsPage(props: {
         <section className="page-stack">
             <section className="stats-overview-grid">
                 <WeeklyRhythmCard
-                    loading={props.loading}
-                    periodSummary={props.periodSummary}
-                    weekBars={props.weekBars}
-                    refreshing={props.isPeriodRefreshing}
+                    loading={loading}
+                    periodSummary={periodSummary}
+                    weekBars={weekBars}
+                    refreshing={shared.selectedPeriodQuery.isFetching && Boolean(shared.selectedPeriodSummary)}
                     onSelectDate={props.onSelectDate}
                 />
                 <FocusBalanceCard
-                    dashboard={props.dashboard}
-                    loading={props.loading}
+                    dashboard={dashboard}
+                    loading={loading}
                     activeSeconds={presenceByKey.get('active') ?? 0}
                     idleSeconds={presenceByKey.get('idle') ?? 0}
                     lockedSeconds={presenceByKey.get('locked') ?? 0}
-                    refreshing={props.isTimelineRefreshing}
+                    refreshing={shared.isTimelineRefreshing}
                 />
             </section>
 
@@ -124,29 +149,29 @@ export function StatsPage(props: {
                 <div className="panel page-panel stats-analysis-card">
                     <div className="panel-header">
                         <div>
-                            <h2>{props.appUsageMetric === 'visible_window' ? '可见窗口分布' : '应用分布'}</h2>
+                            <h2>{appUsageMetric === 'visible_window' ? '可见窗口分布' : '应用分布'}</h2>
                         </div>
-                        <RefreshBadge active={props.isAppStatsRefreshing} />
+                        <RefreshBadge active={appStatsQuery.isFetching} />
                     </div>
                     <p className="stats-metric-note">
-                        {props.appUsageMetric === 'visible_window'
+                        {appUsageMetric === 'visible_window'
                             ? '按实际露出的可见窗口累计，同一时间多个窗口可并行计时，总时长可能超过活跃时长。'
                             : '按前台焦点窗口累计，同一时刻只累计一个应用。'}
                     </p>
-                    {props.appStatsError && props.appStats.length === 0 ? (
+                    {appStatSlicesError && appStatSlices.length === 0 ? (
                         <ErrorCard
-                            message={props.appStatsError}
-                            onRetry={props.onRetryAppStats}
-                            retrying={props.isAppStatsRefreshing}
+                            message={appStatSlicesError}
+                            onRetry={() => { void appStatsQuery.refetch() }}
+                            retrying={appStatsQuery.isFetching}
                         />
                     ) : (
                         <ErrorBoundary>
                             <Suspense fallback={<ChartLazyFallback variant="donut" />}>
                                 <LazyDonutChart
                                     loading={appDistributionLoading}
-                                    title={props.appUsageMetric === 'visible_window' ? '可见窗口分布' : '应用分布'}
-                                    totalLabel={formatDuration(props.appStatsTotalSeconds)}
-                                    slices={props.appStats}
+                                    title={appUsageMetric === 'visible_window' ? '可见窗口分布' : '应用分布'}
+                                    totalLabel={formatDuration(appStatTotalSeconds)}
+                                    slices={appStatSlices}
                                     filter={props.appFilter}
                                     filterKind="app"
                                     onSelect={props.setAppFilter}
@@ -161,15 +186,15 @@ export function StatsPage(props: {
                         <div>
                             <h2>域名分布</h2>
                         </div>
-                        <RefreshBadge active={props.isTimelineRefreshing} />
+                        <RefreshBadge active={shared.isTimelineRefreshing} />
                     </div>
                     <ErrorBoundary>
                         <Suspense fallback={<ChartLazyFallback variant="donut" />}>
                             <LazyDonutChart
-                                loading={props.loading}
+                                loading={loading}
                                 title="域名分布"
-                                totalLabel={formatDuration(sumSlices(props.dashboard?.domainSlices ?? []))}
-                                slices={props.dashboard?.domainSlices ?? []}
+                                totalLabel={formatDuration(sumSlices(dashboard?.domainSlices ?? []))}
+                                slices={dashboard?.domainSlices ?? []}
                                 filter={props.domainFilter}
                                 filterKind="domain"
                                 onSelect={props.setDomainFilter}
@@ -183,15 +208,15 @@ export function StatsPage(props: {
                         <div>
                             <h2>日内分布</h2>
                         </div>
-                        <RefreshBadge active={props.isTimelineRefreshing} />
+                        <RefreshBadge active={shared.isTimelineRefreshing} />
                     </div>
                     <ErrorBoundary>
                         <Suspense fallback={<ChartLazyFallback variant="day" />}>
                             <LazyDayUsageView
-                                dashboard={props.dashboard}
-                                metric={props.appUsageMetric}
-                                selectedDate={props.selectedDate}
-                                loading={props.loading || props.isTimelineRefreshing}
+                                dashboard={dashboard}
+                                metric={appUsageMetric}
+                                selectedDate={selectedDate}
+                                loading={loading || shared.isTimelineRefreshing}
                             />
                         </Suspense>
                     </ErrorBoundary>
@@ -202,23 +227,23 @@ export function StatsPage(props: {
                         <div>
                             <h2>使用热度</h2>
                         </div>
-                        <RefreshBadge active={props.isCalendarRefreshing} />
+                        <RefreshBadge active={calendarQuery.isFetching} />
                     </div>
-                    {props.loading || props.calendarDays.length > 0 || props.isCalendarRefreshing ? (
+                    {loading || (calendarQuery.data?.days ?? []).length > 0 || calendarQuery.isFetching ? (
                         <CalendarGrid
-                            loading={props.loading || (props.isCalendarRefreshing && props.calendarDays.length === 0)}
-                            month={props.calendarMonth}
-                            days={props.calendarDays}
-                            selectedDate={props.selectedDate}
-                            todayDate={props.agentToday}
+                            loading={loading || (calendarQuery.isFetching && (calendarQuery.data?.days ?? []).length === 0)}
+                            month={calendarMonth}
+                            days={calendarQuery.data?.days ?? []}
+                            selectedDate={selectedDate}
+                            todayDate={shared.selectedPeriodSummary?.date ?? null}
                             onSelectDate={props.onSelectDate}
                             onMonthChange={props.onCalendarMonthChange}
                         />
-                    ) : props.calendarError ? (
-                        <ErrorCard
-                            message={props.calendarError}
-                            onRetry={props.onRetryCalendar}
-                            retrying={props.isCalendarRefreshing}
+            ) : calendarQuery.error ? (
+                <ErrorCard
+                    message={calendarQuery.error instanceof Error ? calendarQuery.error.message : '日历数据加载失败'}
+                            onRetry={() => { void calendarQuery.refetch() }}
+                            retrying={calendarQuery.isFetching}
                         />
                     ) : (
                         <div className="state-card">加载中…</div>
@@ -311,6 +336,7 @@ function FocusBalanceCard(props: {
     lockedSeconds: number
     refreshing: boolean
 }) {
+    const loading = props.loading
     const [selectedPresenceKey, setSelectedPresenceKey] = useState<'active' | 'idle' | 'locked'>('active')
     const selectedPresenceLabel =
         selectedPresenceKey === 'active' ? '活跃' : selectedPresenceKey === 'idle' ? '空闲' : '锁定'
@@ -367,7 +393,7 @@ function FocusBalanceCard(props: {
                         <ErrorBoundary>
                             <Suspense fallback={<ChartLazyFallback variant="compact-donut" />}>
                                 <LazyCompactDonutChart
-                                    loading={props.loading}
+                                    loading={loading}
                                     slices={presenceSlices}
                                     totalLabel={formatDuration(selectedPresenceValue)}
                                     secondaryLabel={selectedPresenceLabel}
@@ -387,7 +413,7 @@ function FocusBalanceCard(props: {
                 </div>
 
                 <div className="presence-legend">
-                    {props.loading ? (
+                    {loading ? (
                         Array.from({ length: 3 }, (_, index) => (
                             <div key={`presence-skeleton-${index}`} className="presence-legend-item presence-legend-item-skeleton">
                                 <span className="skeleton-block skeleton-inline skeleton-legend-title" />
@@ -435,7 +461,7 @@ function FocusBalanceCard(props: {
             </div>
 
             <div className="focus-metric-stack">
-                {props.loading ? (
+                {loading ? (
                     <>
                         <div className="focus-metric-card focus-metric-card-skeleton">
                             <span className="skeleton-block skeleton-inline skeleton-metric-label" />
@@ -472,6 +498,7 @@ function WeeklyBarChart(props: {
     onSelectDate: (date: string) => void
     loading?: boolean
 }) {
+    const loading = props.loading ?? false
     const minVisualBarPercent = 1.2
     const maxValue = Math.max(
         ...props.bars.map((bar) => Math.max(bar.activeSeconds, bar.focusSeconds)),
@@ -481,17 +508,17 @@ function WeeklyBarChart(props: {
     const axisTicks = [axisMaxValue, axisMaxValue / 2, 0]
 
     return (
-        <div className={`weekly-chart-shell ${props.loading ? 'weekly-chart-shell-skeleton' : ''}`} aria-hidden={props.loading ? 'true' : undefined}>
+        <div className={`weekly-chart-shell ${loading ? 'weekly-chart-shell-skeleton' : ''}`} aria-hidden={loading ? 'true' : undefined}>
             <div className="weekly-chart-main">
                 {axisTicks.map((tick) => (
                     <span
                         key={tick}
-                        className={`weekly-grid-line ${props.loading ? 'weekly-grid-line-skeleton' : ''}`}
+                        className={`weekly-grid-line ${loading ? 'weekly-grid-line-skeleton' : ''}`}
                         style={{ bottom: `${axisMaxValue === 0 ? 0 : (tick / axisMaxValue) * 100}%` }}
                     />
                 ))}
 
-                <div className={`weekly-bars ${props.loading ? 'weekly-bars-skeleton' : ''}`}>
+                <div className={`weekly-bars ${loading ? 'weekly-bars-skeleton' : ''}`}>
                     {props.bars.map((bar) => {
                         const normalizedFocusSeconds = Math.max(bar.focusSeconds, bar.activeSeconds)
                         const activeBarHeightPercent = bar.activeSeconds > 0
@@ -507,24 +534,24 @@ function WeeklyBarChart(props: {
                             <button
                                 key={bar.date}
                                 type="button"
-                                className={`weekly-bar-column ${bar.isSelected ? 'is-selected' : ''} ${props.loading ? 'weekly-bar-column-skeleton' : ''}`}
+                                className={`weekly-bar-column ${bar.isSelected ? 'is-selected' : ''} ${loading ? 'weekly-bar-column-skeleton' : ''}`}
                                 onClick={() => {
-                                    if (!props.loading) {
+                                    if (!loading) {
                                         props.onSelectDate(bar.date)
                                     }
                                 }}
-                                disabled={props.loading}
+                                disabled={loading}
                                 aria-pressed={bar.isSelected}
                                 aria-label={`${bar.date}，活跃 ${formatDuration(bar.activeSeconds)}，前台 ${formatDuration(normalizedFocusSeconds)}`}
                                 title={`${bar.date} 活跃 ${formatDuration(bar.activeSeconds)} · 前台 ${formatDuration(normalizedFocusSeconds)}`}
                             >
-                                <div className={`weekly-bar-track ${props.loading ? 'weekly-bar-track-skeleton' : ''}`}>
+                                <div className={`weekly-bar-track ${loading ? 'weekly-bar-track-skeleton' : ''}`}>
                                     <div
-                                        className={`weekly-bar weekly-bar-focus-base is-cap ${props.loading ? 'skeleton-block' : ''}`}
+                                        className={`weekly-bar weekly-bar-focus-base is-cap ${loading ? 'skeleton-block' : ''}`}
                                         style={{ height: focusBarHeight }}
                                     />
                                     <div
-                                        className={`weekly-bar weekly-bar-active is-cap ${props.loading ? 'skeleton-block' : ''}`}
+                                        className={`weekly-bar weekly-bar-active is-cap ${loading ? 'skeleton-block' : ''}`}
                                         style={{
                                             height: activeBarHeight,
                                             bottom: 0,
@@ -532,7 +559,7 @@ function WeeklyBarChart(props: {
                                     />
                                 </div>
                                 <span className="weekly-bar-day">
-                                    {props.loading ? (
+                                    {loading ? (
                                         <span className="skeleton-block skeleton-inline skeleton-weekday-label" />
                                     ) : (
                                         bar.dayLabel
@@ -544,10 +571,10 @@ function WeeklyBarChart(props: {
                 </div>
             </div>
 
-            <div className={`weekly-axis ${props.loading ? 'weekly-axis-skeleton' : ''}`}>
+            <div className={`weekly-axis ${loading ? 'weekly-axis-skeleton' : ''}`}>
                 {axisTicks.map((tick) => (
                     <span key={`label-${tick}`} className="weekly-axis-label">
-                        {props.loading ? (
+                        {loading ? (
                             <span className="skeleton-block skeleton-inline skeleton-axis-label" />
                         ) : (
                             formatWeeklyAxisTick(tick)

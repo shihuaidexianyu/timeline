@@ -1955,6 +1955,93 @@ ORDER BY date ASC
         })
     }
 
+    /// Like `read_app_usage_trend` but for browser domains. Reads from
+    /// `daily_domain_usage` and returns the same `AppUsageTrendResponse`
+    /// shape (the `metric` field is set to `VisibleWindow` as a placeholder
+    /// since the enum doesn't have a domain variant — the frontend ignores
+    /// `metric` for domain trends).
+    pub async fn read_domain_usage_trend(
+        &self,
+        anchor_date: Date,
+        period: TrendPeriod,
+        limit: usize,
+    ) -> Result<AppUsageTrendResponse> {
+        let (start_date, end_date) = trend_bounds(anchor_date, period)?;
+        let days = date_range(start_date, end_date)?;
+        let day_index = days
+            .iter()
+            .enumerate()
+            .map(|(index, date)| (date.to_string(), index))
+            .collect::<BTreeMap<_, _>>();
+
+        let rows = sqlx::query(
+            r#"
+SELECT date, domain, seconds
+FROM daily_domain_usage
+WHERE date >= ? AND date <= ? AND seconds > 0
+ORDER BY date ASC
+"#,
+        )
+        .bind(start_date.to_string())
+        .bind(end_date.to_string())
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut totals: BTreeMap<String, (String, i64)> = BTreeMap::new();
+        let mut values: BTreeMap<(String, String), i64> = BTreeMap::new();
+        for row in rows {
+            let date = row.get::<String, _>("date");
+            let domain = row.get::<String, _>("domain");
+            let seconds = row.get::<i64, _>("seconds");
+            totals
+                .entry(domain.clone())
+                .and_modify(|entry| {
+                    entry.1 += seconds;
+                })
+                .or_insert((domain.clone(), seconds));
+            values.insert((domain, date), seconds);
+        }
+
+        let normalized_limit = limit.clamp(1, 12);
+        let mut series: Vec<(String, String, i64)> = totals
+            .into_iter()
+            .map(|(key, (label, total_seconds))| (key, label, total_seconds))
+            .collect();
+        series.sort_by(|left, right| right.2.cmp(&left.2).then_with(|| left.0.cmp(&right.0)));
+
+        let series = series
+            .into_iter()
+            .take(normalized_limit)
+            .map(|(key, label, total_seconds)| {
+                let mut daily_seconds = vec![0; days.len()];
+                for ((candidate_key, date), seconds) in &values {
+                    if candidate_key == &key
+                        && let Some(index) = day_index.get(date)
+                    {
+                        daily_seconds[*index] = *seconds;
+                    }
+                }
+
+                AppUsageTrendSeries {
+                    key,
+                    label,
+                    total_seconds,
+                    daily_seconds,
+                }
+            })
+            .collect();
+
+        Ok(AppUsageTrendResponse {
+            period,
+            metric: UsageMetric::VisibleWindow,
+            start_date: start_date.to_string(),
+            end_date: end_date.to_string(),
+            timezone: self.timezone.to_string(),
+            days: days.into_iter().map(|date| date.to_string()).collect(),
+            series,
+        })
+    }
+
     pub async fn read_recent_events(&self, limit: i64) -> Result<Vec<DebugEvent>> {
         let rows = sqlx::query(
             "SELECT id, kind, payload_json, observed_at FROM raw_events ORDER BY id DESC LIMIT ?",

@@ -1,13 +1,12 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useState } from 'react'
 import { ChartLazyFallback } from '../components/chart-lazy-fallback'
 import { ErrorBoundary, ErrorCard, RefreshBadge } from '../shared/ui'
-import type {
-  AppUsageTrendResponse,
-  TrendPeriod,
-  UsageMetric,
-} from '../shared/api'
+import { useAppUsageTrendQuery, useDomainUsageTrendQuery } from '../shared/api'
+import type { TrendPeriod, UsageMetric } from '../shared/api'
+import type { SharedData } from '../app/use-shared-data'
 
 export type AppTrendView = TrendPeriod
+export type TrendDimension = 'app' | 'domain'
 
 const LazyAppUsageTrendChart = lazy(() =>
   import('../components/app-usage-trend-chart').then((module) => ({
@@ -16,24 +15,52 @@ const LazyAppUsageTrendChart = lazy(() =>
 )
 
 export function UsagePage(props: {
-  loading: boolean
-  selectedDate: string
+  shared: SharedData
   appUsageMetric: UsageMetric
   setAppUsageMetric: (value: UsageMetric) => void
-  appTrendView: AppTrendView
-  setAppTrendView: (value: AppTrendView) => void
-  appTrend: AppUsageTrendResponse | null
-  appTrendError: string | null
-  onRetryTrend?: () => void
-  isAppTrendRefreshing: boolean
 }) {
-  const { appTrendView, setAppTrendView } = props
-  const showTrendError = props.appTrendError && !props.appTrend
-  const sourceLabel = props.appUsageMetric === 'visible_window' ? '可见窗口' : '前台焦点'
+  const [appTrendView, setAppTrendView] = useState<AppTrendView>('week')
+  const [dimension, setDimension] = useState<TrendDimension>('app')
+  const trendDate = props.shared.dateState.selectedDate ?? props.shared.timelineQuery.data?.date ?? null
+
+  const appTrendQuery = useAppUsageTrendQuery(
+    trendDate ?? '',
+    appTrendView,
+    props.appUsageMetric,
+    6,
+    {
+      enabled: trendDate !== null && dimension === 'app',
+    },
+  )
+
+  const domainTrendQuery = useDomainUsageTrendQuery(
+    trendDate ?? '',
+    appTrendView,
+    6,
+    {
+      enabled: trendDate !== null && dimension === 'domain',
+    },
+  )
+
+  const trend = dimension === 'app' ? (appTrendQuery.data ?? null) : (domainTrendQuery.data ?? null)
+  const isFetching = dimension === 'app' ? appTrendQuery.isFetching : domainTrendQuery.isFetching
+  const queryError = dimension === 'app' ? appTrendQuery.error : domainTrendQuery.error
+  const appTrendError = queryError instanceof Error
+    ? queryError.message
+    : queryError
+      ? '趋势数据加载失败'
+      : null
+  const showTrendError = appTrendError && !trend
+  const sourceLabel = dimension === 'domain'
+    ? '域名'
+    : props.appUsageMetric === 'visible_window' ? '可见窗口' : '前台焦点'
   const metricNote =
-    props.appUsageMetric === 'visible_window'
-      ? '可见窗口：统计当前桌面中实际露出且占据所在屏幕至少 25% 的窗口，可同时累计多个应用。'
-      : '前台焦点：只统计当前获得焦点的窗口，同一时刻只累计一个应用。'
+    dimension === 'domain'
+      ? '按浏览器前台标签页域名累计，只统计浏览器前台时的活动标签页。'
+      : props.appUsageMetric === 'visible_window'
+        ? '可见窗口：统计当前桌面中实际露出且占据所在屏幕至少 25% 的窗口，可同时累计多个应用。'
+        : '前台焦点：只统计当前获得焦点的窗口，同一时刻只累计一个应用。'
+  const loading = !props.shared.hasDashboard
 
   return (
     <section className="page-stack usage-page">
@@ -44,11 +71,29 @@ export function UsagePage(props: {
             <h2>使用趋势</h2>
           </div>
           <div className="usage-trend-actions">
-            <RefreshBadge active={props.isAppTrendRefreshing} />
-            <MetricSwitch
-              value={props.appUsageMetric}
-              onChange={props.setAppUsageMetric}
-            />
+            <RefreshBadge active={isFetching} />
+            <div className="ui-segmented" aria-label="趋势维度">
+              <button
+                type="button"
+                className={dimension === 'app' ? 'is-active' : ''}
+                onClick={() => setDimension('app')}
+              >
+                应用
+              </button>
+              <button
+                type="button"
+                className={dimension === 'domain' ? 'is-active' : ''}
+                onClick={() => setDimension('domain')}
+              >
+                域名
+              </button>
+            </div>
+            {dimension === 'app' ? (
+              <MetricSwitch
+                value={props.appUsageMetric}
+                onChange={props.setAppUsageMetric}
+              />
+            ) : null}
             <div className="ui-segmented" aria-label="应用趋势范围">
               <button
                 type="button"
@@ -72,16 +117,22 @@ export function UsagePage(props: {
 
         {showTrendError ? (
           <ErrorCard
-            message={props.appTrendError ?? ''}
-            onRetry={props.onRetryTrend}
-            retrying={props.isAppTrendRefreshing}
+            message={appTrendError ?? ''}
+            onRetry={() => {
+              if (dimension === 'app') {
+                void appTrendQuery.refetch()
+              } else {
+                void domainTrendQuery.refetch()
+              }
+            }}
+            retrying={isFetching}
           />
         ) : (
           <ErrorBoundary>
             <Suspense fallback={<ChartLazyFallback variant="trend" />}>
               <LazyAppUsageTrendChart
-                trend={props.appTrend}
-                loading={props.loading || (props.isAppTrendRefreshing && !props.appTrend)}
+                trend={trend}
+                loading={loading || (isFetching && !trend)}
               />
             </Suspense>
           </ErrorBoundary>

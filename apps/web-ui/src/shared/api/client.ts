@@ -152,6 +152,20 @@ export function getDomainStats(date: string, signal?: AbortSignal) {
   return request<DurationStat[]>(`/api/stats/domains?date=${date}`, { signal })
 }
 
+export function getDomainUsageTrend(
+  date: string,
+  period: TrendPeriod,
+  limit = 6,
+  signal?: AbortSignal,
+) {
+  const query = new URLSearchParams({
+    date,
+    period,
+    limit: String(limit),
+  })
+  return request<AppUsageTrendResponse>(`/api/stats/domains/trend?${query}`, { signal })
+}
+
 export function getFocusStats(date: string, signal?: AbortSignal) {
   return request<FocusStats>(`/api/stats/focus?date=${date}`, { signal })
 }

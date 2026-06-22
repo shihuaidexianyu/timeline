@@ -1,6 +1,8 @@
 import { render, screen } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { describe, expect, it, vi } from 'vitest'
-import type { AgentSettingsResponse } from '../shared/api'
+import { apiQueryKeys, type AgentSettingsResponse } from '../shared/api'
+import type { SharedData } from '../app/use-shared-data'
 import { SettingsPage } from './settings-page'
 
 const settings: AgentSettingsResponse = {
@@ -34,26 +36,48 @@ const settings: AgentSettingsResponse = {
   ],
 }
 
+function makeShared(): SharedData {
+  return {
+    timelineQuery: { data: null, isPending: false, isFetching: false, error: null, dataUpdatedAt: 0, refetch: vi.fn() } as unknown as SharedData['timelineQuery'],
+    selectedTimelineQuery: { data: null, isPending: false, isFetching: false, error: null, dataUpdatedAt: 0, refetch: vi.fn() } as unknown as SharedData['selectedTimelineQuery'],
+    periodQuery: { data: null, isPending: false, isFetching: false, error: null } as unknown as SharedData['periodQuery'],
+    selectedPeriodQuery: { data: null, isPending: false, isFetching: false, error: null } as unknown as SharedData['selectedPeriodQuery'],
+    selectedPeriodSummary: null,
+    dashboard: null,
+    dateState: {
+      selectedDate: '2026-06-18',
+      calendarMonth: '2026-06',
+      viewport: { zoomHours: 0.5, viewStartHour: 0, viewStartSec: 0, viewEndSec: 1800 },
+      initializeDate: vi.fn(),
+      selectDate: vi.fn(),
+      selectCalendarMonth: vi.fn(),
+      setZoomHours: vi.fn(),
+      setViewStartHour: vi.fn(),
+    },
+    resolvedSelectedDate: '2026-06-18',
+    resolvedTimezone: 'Asia/Shanghai',
+    hasDashboard: true,
+    isInitialLoading: false,
+    isTimelineRefreshing: false,
+    lastTimelineDataUpdatedAt: Date.now(),
+  }
+}
+
 describe('SettingsPage monitors', () => {
   it('renders a compact Chinese status overview instead of raw status badges', () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false, gcTime: 0 } },
+    })
+    queryClient.setQueryData(apiQueryKeys.agentSettings(), settings)
+
     render(
-      <SettingsPage
-        agentSettings={settings}
-        loading={false}
-        error={null}
-        settingsError={null}
-        settingsNotice={null}
-        lastUpdatedAt="14:50:21"
-        selectedDate="2026-06-18"
-        timezone="Asia/Shanghai"
-        savingAutostart={false}
-        savingConfig={false}
-        isSettingsRefreshing={false}
-        theme="system"
-        onChangeTheme={vi.fn()}
-        onToggleAutostart={vi.fn()}
-        onUpdateConfig={vi.fn()}
-      />,
+      <QueryClientProvider client={queryClient}>
+        <SettingsPage
+          shared={makeShared()}
+          theme="system"
+          onChangeTheme={vi.fn()}
+        />
+      </QueryClientProvider>,
     )
 
     expect(screen.getByText('2 个采集模块正常')).toBeInTheDocument()

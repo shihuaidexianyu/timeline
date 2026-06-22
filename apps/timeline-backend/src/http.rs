@@ -41,6 +41,7 @@ pub fn build_router(state: AgentState) -> Router {
         .route("/api/stats/apps", get(get_app_stats))
         .route("/api/stats/apps/trend", get(get_app_usage_trend))
         .route("/api/stats/domains", get(get_domain_stats))
+        .route("/api/stats/domains/trend", get(get_domain_usage_trend))
         .route("/api/stats/focus", get(get_focus_stats))
         .route("/api/settings", get(get_settings))
         .route("/api/settings/autostart", post(post_autostart))
@@ -146,6 +147,19 @@ async fn get_app_usage_trend(
     let trend = state
         .store()
         .read_app_usage_trend(date, period, query.limit.unwrap_or(6), metric)
+        .await?;
+    Ok(Json(ApiResponse::ok(trend)))
+}
+
+async fn get_domain_usage_trend(
+    State(state): State<AgentState>,
+    Query(query): Query<AppTrendQuery>,
+) -> Result<Json<ApiResponse<AppUsageTrendResponse>>, AppError> {
+    let date = parse_or_today(query.date.as_deref(), state.timezone())?;
+    let period = parse_trend_period(query.period.as_deref())?;
+    let trend = state
+        .store()
+        .read_domain_usage_trend(date, period, query.limit.unwrap_or(6))
         .await?;
     Ok(Json(ApiResponse::ok(trend)))
 }

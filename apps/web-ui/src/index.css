@@ -181,6 +181,13 @@ body,
   min-height: 100%;
 }
 
+html {
+  /* Reserve scrollbar space even when content doesn't overflow, so switching
+     between pages of different heights (e.g. stats → usage) doesn't cause a
+     ~17px horizontal shift when the scrollbar appears/disappears. */
+  scrollbar-gutter: stable;
+}
+
 body {
   margin: 0;
   min-height: 100vh;

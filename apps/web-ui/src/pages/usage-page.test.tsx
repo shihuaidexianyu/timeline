@@ -59,7 +59,7 @@ describe('UsagePage', () => {
       <QueryClientProvider client={queryClient}>
         <UsagePage
           shared={makeShared()}
-          appUsageMetric="visible_window"
+          appUsageMetric="focus"
           setAppUsageMetric={vi.fn()}
         />
       </QueryClientProvider>,
@@ -68,6 +68,6 @@ describe('UsagePage', () => {
     expect(screen.getByRole('heading', { name: '使用趋势' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '周' })).toHaveClass('is-active')
     expect(screen.queryByRole('button', { name: '日内' })).not.toBeInTheDocument()
-    expect(screen.getByText(/占据所在屏幕至少 25%/)).toBeInTheDocument()
+    expect(screen.getByText(/只统计当前获得焦点的窗口/)).toBeInTheDocument()
   })
 })

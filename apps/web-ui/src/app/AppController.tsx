@@ -16,7 +16,7 @@ export function AppController() {
   const [domainFilter, setDomainFilter] = useState<DashboardFilter>(null)
   const [urlMetric, setUrlMetric] = useHashQueryParam('metric')
   const appUsageMetric: UsageMetric =
-    urlMetric === 'focus' || urlMetric === 'visible_window' ? urlMetric : 'visible_window'
+    urlMetric === 'focus' || urlMetric === 'visible_window' ? urlMetric : 'focus'
   const setAppUsageMetric = (value: UsageMetric) => setUrlMetric(value)
 
   const shared = useSharedData()

@@ -119,7 +119,7 @@ describe('StatsPage', () => {
       <QueryClientProvider client={queryClient}>
         <StatsPage
           shared={makeShared()}
-          appUsageMetric="visible_window"
+          appUsageMetric="focus"
           appFilter={null}
           domainFilter={null}
           setAppFilter={vi.fn()}
@@ -132,7 +132,7 @@ describe('StatsPage', () => {
 
     expect(screen.getByRole('heading', { name: '本周节奏' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: '状态分布' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: '可见窗口分布' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: '应用分布' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: '域名分布' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: '使用热度' })).toBeInTheDocument()
     expect(screen.getAllByRole('status', { name: '图表加载中' }).length).toBeGreaterThan(0)

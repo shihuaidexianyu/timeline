@@ -521,11 +521,31 @@ async fn sync_presence_state(
         return Ok(());
     }
 
-    if let Some(previous_presence) = previous_presence {
+    if let Some(previous_presence) = &previous_presence {
         state
             .store()
             .end_presence_segment(previous_presence.id, observed_at)
             .await?;
+    }
+
+    // When transitioning to idle/locked, close the current browser segment
+    // so domain time doesn't accumulate while the user is away. The extension
+    // may still send heartbeats (the browser window is technically focused),
+    // but sync_browser_event will reject them during idle.
+    if matches!(presence, PresenceState::Idle | PresenceState::Locked)
+        && let Some(previous) = &previous_presence
+        && matches!(previous.state, PresenceState::Active)
+    {
+        let previous_browser = {
+            let mut runtime = state.runtime().await;
+            runtime.current_browser.take()
+        };
+        if let Some(browser) = previous_browser {
+            state
+                .store()
+                .end_browser_segment(browser.id, observed_at)
+                .await?;
+        }
     }
 
     let id = state
@@ -635,10 +655,11 @@ async fn maybe_emit_health_reminder(
 /// Processes an incoming browser extension event.
 ///
 /// Decision tree:
-///   1. Domain is in `ignored_domains` → close current browser segment, reject.
-///   2. No browser is the foreground app → close current browser segment, reject.
-///   3. Same domain + window + tab as current → touch `last_seen_at`, accept.
-///   4. Different domain/tab → close previous browser segment, open new one, accept.
+///   1. User is idle/locked → close current browser segment, reject.
+///   2. Domain is in `ignored_domains` → close current browser segment, reject.
+///   3. No browser is the foreground app → close current browser segment, reject.
+///   4. Same domain + window + tab as current → touch `last_seen_at`, accept.
+///   5. Different domain/tab → close previous browser segment, open new one, accept.
 pub async fn sync_browser_event(
     state: &AgentState,
     payload: common::BrowserEventPayload,
@@ -654,6 +675,30 @@ pub async fn sync_browser_event(
         .await?;
 
     let _browser_transition = state.browser_transition().await;
+
+    // Reject events while the user is idle/locked — the browser window may
+    // still be focused but the user isn't present. This prevents domain time
+    // from accumulating during idle and exceeding active time.
+    let presence =
+        crate::windows::detect_presence(Duration::from_secs(runtime_config.idle_threshold_secs))
+            .unwrap_or(PresenceState::Active);
+    if matches!(presence, PresenceState::Idle | PresenceState::Locked) {
+        let current = {
+            let mut runtime = state.runtime().await;
+            runtime.current_browser.take()
+        };
+        if let Some(current) = current {
+            state
+                .store()
+                .end_browser_segment(current.id, observed_at)
+                .await?;
+        }
+
+        return Ok(common::BrowserEventAck {
+            accepted: false,
+            reason: Some("user is idle or workstation is locked".to_string()),
+        });
+    }
 
     if is_ignored_domain(&runtime_config, &payload.domain) {
         let current = {

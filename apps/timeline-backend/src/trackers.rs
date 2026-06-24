@@ -679,10 +679,18 @@ pub async fn sync_browser_event(
     // Reject events while the user is idle/locked — the browser window may
     // still be focused but the user isn't present. This prevents domain time
     // from accumulating during idle and exceeding active time.
-    let presence =
-        crate::windows::detect_presence(Duration::from_secs(runtime_config.idle_threshold_secs))
-            .unwrap_or(PresenceState::Active);
-    if matches!(presence, PresenceState::Idle | PresenceState::Locked) {
+    //
+    // We use a PLAIN idle check (not detect_presence) because detect_presence
+    // widens the idle threshold to 30 minutes for fullscreen browsers (video
+    // playback). That widening is appropriate for presence/health-reminder
+    // purposes, but NOT for domain timing — a user who walked away from a
+    // fullscreen YouTube video shouldn't have 30 minutes of "youtube.com"
+    // counted as active domain time.
+    let idle_threshold = Duration::from_secs(runtime_config.idle_threshold_secs);
+    let idle_for = crate::windows::read_idle_duration().unwrap_or(Duration::ZERO);
+    let is_workstation_locked = crate::windows::is_workstation_locked().unwrap_or(false);
+    let is_idle_or_locked = is_workstation_locked || idle_for >= idle_threshold;
+    if is_idle_or_locked {
         let current = {
             let mut runtime = state.runtime().await;
             runtime.current_browser.take()

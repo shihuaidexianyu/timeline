@@ -621,7 +621,7 @@ fn subtract_rect(source: ScreenRect, cover: ScreenRect) -> Vec<ScreenRect> {
 /// `GetLastInputInfo` returns the tick count (ms since boot) of the last input event;
 /// we subtract it from the current tick count to get the idle duration.
 /// `saturating_sub` prevents underflow if the tick counter wraps (>584 billion ms / ~185 years).
-fn read_idle_duration() -> Result<Duration> {
+pub fn read_idle_duration() -> Result<Duration> {
     let mut last_input_info = LASTINPUTINFO {
         cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
         dwTime: 0,
@@ -779,7 +779,7 @@ fn read_session_id(process_id: u32) -> Result<u32> {
 /// Detects whether the current Windows session is locked from Terminal Services
 /// session metadata. This avoids querying the input desktop, which can block in
 /// GUI agent processes on some machines.
-fn is_workstation_locked() -> Result<bool> {
+pub fn is_workstation_locked() -> Result<bool> {
     let session_id = read_session_id(std::process::id())?;
     let mut buffer = PWSTR::null();
     let mut bytes_returned = 0u32;

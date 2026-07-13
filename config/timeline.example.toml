@@ -8,10 +8,15 @@ idle_threshold_secs = 300
 poll_interval_millis = 1000
 health_reminder_enabled = true
 health_reminder_threshold_secs = 3000
-debug = true
+# 可选本地时间窗口；开始与结束必须成对配置，支持跨午夜。
+# health_reminder_work_start = "09:00"
+# health_reminder_work_end = "18:00"
+# health_reminder_quiet_start = "22:00"
+# health_reminder_quiet_end = "08:00"
+debug = false
 tray_enabled = true
 record_window_titles = true
-record_page_titles = true
+record_page_titles = false
 
 ignored_apps = []
 ignored_domains = []

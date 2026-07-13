@@ -1,0 +1,12 @@
+:root { color-scheme: light dark; font-family: "Microsoft YaHei UI", sans-serif; }
+body { width: 320px; margin: 0; background: Canvas; color: CanvasText; }
+main { padding: 16px; }
+header { display: flex; justify-content: space-between; align-items: center; font-size: 16px; }
+header span { font-size: 12px; color: #2e9b8c; }
+dl { margin: 14px 0; display: grid; gap: 10px; }
+dl div { display: grid; gap: 3px; }
+dt { color: GrayText; font-size: 12px; }
+dd { margin: 0; overflow-wrap: anywhere; }
+#error { min-height: 18px; color: #c95a6b; font-size: 12px; }
+button { width: 100%; min-height: 44px; border: 0; border-radius: 8px; background: #2f6fed; color: white; font: inherit; }
+button:disabled { opacity: .6; }

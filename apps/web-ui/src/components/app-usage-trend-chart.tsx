@@ -1,27 +1,9 @@
-import { useMemo, type ComponentType } from 'react'
-import ReactEChartsCoreImport from 'echarts-for-react/lib/core'
-import * as echarts from 'echarts/core'
-import { LineChart } from 'echarts/charts'
-import {
-  GridComponent,
-  LegendComponent,
-  TooltipComponent,
-} from 'echarts/components'
-import { SVGRenderer } from 'echarts/renderers'
+import { useMemo } from 'react'
 import type { EChartsOption } from 'echarts'
 import type { AppUsageTrendResponse } from '../shared/api'
 import { formatDuration } from '../lib/chart-model'
-import { getEChartsTooltipColors, getThemeColor } from '../lib/theme'
-
-echarts.use([LineChart, GridComponent, LegendComponent, TooltipComponent, SVGRenderer])
-
-const ReactEChartsCore = (
-  typeof ReactEChartsCoreImport === 'object' &&
-    ReactEChartsCoreImport !== null &&
-    'default' in ReactEChartsCoreImport
-    ? (ReactEChartsCoreImport as { default: unknown }).default
-    : ReactEChartsCoreImport
-) as ComponentType<Record<string, unknown>>
+import { getEChartsThemeTokens, type ResolvedTheme } from '../lib/theme'
+import { echarts, ReactEChartsCore } from './echarts-runtime'
 
 const SANS_FAMILY = '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif'
 const LINE_COLORS = [
@@ -45,6 +27,7 @@ type AxisTooltipParam = {
 export function AppUsageTrendChart(props: {
   trend: AppUsageTrendResponse | null
   loading?: boolean
+  resolvedTheme: ResolvedTheme
 }) {
   const isLoading = Boolean(props.loading) && !props.trend
   const trend = props.trend
@@ -54,13 +37,10 @@ export function AppUsageTrendChart(props: {
       return {}
     }
 
-    const tooltipColors = getEChartsTooltipColors()
-    const labelColor = getThemeColor('--text-main', '#1f2a37')
-    const axisColor = getThemeColor('--text-soft', '#667085')
-    const gridColor = getThemeColor('--chart-grid', 'rgba(125, 142, 165, 0.18)')
+    const theme = getEChartsThemeTokens(props.resolvedTheme)
 
     return {
-      animation: true,
+      animation: !window.matchMedia('(prefers-reduced-motion: reduce)').matches,
       animationDuration: 180,
       animationDurationUpdate: 180,
       color: LINE_COLORS,
@@ -68,11 +48,11 @@ export function AppUsageTrendChart(props: {
         trigger: 'axis',
         appendToBody: true,
         transitionDuration: 0.08,
-        backgroundColor: tooltipColors.backgroundColor,
-        borderColor: tooltipColors.borderColor,
+        backgroundColor: theme.panel,
+        borderColor: theme.border,
         borderWidth: 1,
         textStyle: {
-          color: labelColor,
+          color: theme.text,
           fontFamily: SANS_FAMILY,
         },
         formatter: (rawParams) => formatTooltip(rawParams, trend),
@@ -85,7 +65,7 @@ export function AppUsageTrendChart(props: {
         itemHeight: 10,
         icon: 'circle',
         textStyle: {
-          color: axisColor,
+          color: theme.textSoft,
           fontFamily: SANS_FAMILY,
         },
       },
@@ -101,12 +81,12 @@ export function AppUsageTrendChart(props: {
         data: trend.days.map(formatDayLabel),
         axisLine: {
           lineStyle: {
-            color: gridColor,
+            color: theme.grid,
           },
         },
         axisTick: { show: false },
         axisLabel: {
-          color: axisColor,
+          color: theme.textSoft,
           fontFamily: SANS_FAMILY,
         },
       },
@@ -115,12 +95,12 @@ export function AppUsageTrendChart(props: {
         min: 0,
         splitLine: {
           lineStyle: {
-            color: gridColor,
+            color: theme.grid,
             type: 'dashed',
           },
         },
         axisLabel: {
-          color: axisColor,
+          color: theme.textSoft,
           fontFamily: SANS_FAMILY,
           formatter: (value: number) => formatAxisDuration(value),
         },
@@ -131,7 +111,7 @@ export function AppUsageTrendChart(props: {
         smooth: true,
         showSymbol: trend.days.length <= 10,
         symbolSize: 6,
-        data: series.daily_seconds,
+        data: series.active_daily_seconds ?? series.daily_seconds,
         lineStyle: {
           width: 3,
           color: LINE_COLORS[index % LINE_COLORS.length],
@@ -147,7 +127,7 @@ export function AppUsageTrendChart(props: {
         },
       })),
     }
-  }, [trend])
+  }, [props.resolvedTheme, trend])
 
   if (isLoading) {
     return (
@@ -164,15 +144,36 @@ export function AppUsageTrendChart(props: {
   }
 
   return (
-    <div className="app-trend-chart" aria-label="应用使用趋势折线图">
-      <ReactEChartsCore
-        echarts={echarts}
-        option={option}
-        notMerge
-        lazyUpdate
-        opts={{ renderer: 'svg' }}
-        style={{ height: 336, width: '100%' }}
-      />
+    <div className="app-trend-chart">
+      <div role="img" aria-label="应用活跃使用趋势折线图，详细数据见隐藏表格">
+        <ReactEChartsCore
+          echarts={echarts}
+          option={option}
+          notMerge
+          lazyUpdate
+          opts={{ renderer: 'svg' }}
+          style={{ height: 336, width: '100%' }}
+        />
+      </div>
+      <table className="visually-hidden">
+        <caption>应用活跃使用趋势数据</caption>
+        <thead>
+          <tr>
+            <th scope="col">日期</th>
+            {trend.series.map((series) => <th key={series.key} scope="col">{series.label}</th>)}
+          </tr>
+        </thead>
+        <tbody>
+          {trend.days.map((day, dayIndex) => (
+            <tr key={day}>
+              <th scope="row">{day}</th>
+              {trend.series.map((series) => (
+                <td key={series.key}>{formatDuration((series.active_daily_seconds ?? series.daily_seconds)[dayIndex] ?? 0)}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }

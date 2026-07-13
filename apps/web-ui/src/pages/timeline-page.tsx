@@ -1,7 +1,8 @@
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
 import { TimelineClock } from '../components/timeline-clock'
 import { TimelineChart } from '../components/timeline-chart'
 import {
+  buildTimelineSearchText,
   filterTimelineFocusSegments,
   normalizeTimelineSearchQuery,
   sortSegmentsByStart,
@@ -37,6 +38,14 @@ const SEGMENT_KIND_OPTIONS: Array<{ key: TimelineSegmentKind; label: string }> =
   { key: 'app', label: '应用' },
   { key: 'browser', label: '浏览器' },
 ]
+const VIEW_PRESETS = [
+  { hours: 0.5, label: '30 分钟' },
+  { hours: 2, label: '2 小时' },
+  { hours: 8, label: '8 小时' },
+  { hours: 24, label: '全天' },
+] as const
+const DAY_SECONDS = 24 * 60 * 60
+const TIME_INPUT_MAX_SECONDS = DAY_SECONDS - 60
 
 export function TimelinePage(props: {
   dashboard: DashboardModel | null
@@ -45,6 +54,7 @@ export function TimelinePage(props: {
   selectedDate: string
   activeOnly: boolean
   searchQuery: string
+  focusSearchRequest: number
   segmentKind: TimelineSegmentKind
   focusedSegmentId: string | null
   viewStartHour: number
@@ -58,19 +68,30 @@ export function TimelinePage(props: {
   setZoomHours: (hours: number) => void
   setViewStartHour: (hours: number) => void
 }) {
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
   const [hoveredFocusSegmentId, setHoveredFocusSegmentId] = useState<string | null>(null)
   const focusSegments = props.dashboard?.focusSegments ?? EMPTY_SEGMENTS
   const browserSegments = props.dashboard?.browserSegments ?? EMPTY_SEGMENTS
   const presenceSegments = props.dashboard?.presenceSegments ?? EMPTY_SEGMENTS
   const focusedSegmentId = props.focusedSegmentId
   const setFocusedSegmentId = props.setFocusedSegmentId
-  const normalizedSearchQuery = normalizeTimelineSearchQuery(props.searchQuery)
+  const deferredSearchQuery = useDeferredValue(props.searchQuery)
+  const normalizedSearchQuery = normalizeTimelineSearchQuery(deferredSearchQuery)
   const hasSearchOrKindFilter =
     normalizedSearchQuery.length > 0 || props.segmentKind !== 'all'
   const hasAnyFilter = hasSearchOrKindFilter || props.activeOnly
   const browserDomainBySegmentId = useMemo(
     () => buildPrimaryBrowserDomainMap(focusSegments, browserSegments),
     [browserSegments, focusSegments],
+  )
+  const searchTextBySegmentId = useMemo(
+    () => new Map(
+      focusSegments.map((segment) => [
+        segment.id,
+        buildTimelineSearchText(segment, browserDomainBySegmentId.get(segment.id) ?? null),
+      ]),
+    ),
+    [browserDomainBySegmentId, focusSegments],
   )
   const filteredFocusSegments = useMemo(
     () =>
@@ -79,8 +100,9 @@ export function TimelinePage(props: {
         browserDomainBySegmentId,
         normalizedSearchQuery,
         props.segmentKind,
+        searchTextBySegmentId,
       ),
-    [browserDomainBySegmentId, focusSegments, normalizedSearchQuery, props.segmentKind],
+    [browserDomainBySegmentId, focusSegments, normalizedSearchQuery, props.segmentKind, searchTextBySegmentId],
   )
   const visibleFocusItems = useMemo(
     () =>
@@ -122,6 +144,11 @@ export function TimelinePage(props: {
       setFocusedSegmentId(null)
     }
   }, [filteredFocusSegments, focusedSegmentId, setFocusedSegmentId])
+
+  useEffect(() => {
+    if (props.focusSearchRequest > 0) searchInputRef.current?.focus()
+  }, [props.focusSearchRequest])
+
   const windowDurationSec = props.viewEndSec - props.viewStartSec
   const visibleAppCount = useMemo(
     () => new Set(visibleFocusItems.map((item) => item.key)).size,
@@ -195,6 +222,8 @@ export function TimelinePage(props: {
               <label className="timeline-control-group timeline-control-group-search">
                 <span className="timeline-control-label">搜索</span>
                 <input
+                  ref={searchInputRef}
+                  id="timeline-search"
                   type="search"
                   className="timeline-control-search"
                   placeholder="应用、标题、域名"
@@ -236,6 +265,69 @@ export function TimelinePage(props: {
                 >
                   仅活跃时段
                 </button>
+              </div>
+
+              <div className="timeline-control-group" role="group" aria-label="时间窗口预设">
+                <span className="timeline-control-label">窗口</span>
+                {VIEW_PRESETS.map((preset) => (
+                  <button
+                    key={preset.hours}
+                    type="button"
+                    className={`timeline-control-button ${props.zoomHours === preset.hours ? 'is-active' : ''}`}
+                    aria-pressed={props.zoomHours === preset.hours}
+                    onClick={() => {
+                      const center = props.viewStartHour + props.zoomHours / 2
+                      props.setZoomHours(preset.hours)
+                      props.setViewStartHour(
+                        clampViewStart(center - preset.hours / 2, preset.hours),
+                      )
+                    }}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="timeline-control-group timeline-time-inputs" role="group" aria-label="时间窗口">
+                <label>
+                  <span className="timeline-control-label">开始</span>
+                  <input
+                    type="time"
+                    step={300}
+                    aria-label="开始时间"
+                    value={formatTimeInput(props.viewStartSec)}
+                    onChange={(event) => {
+                      const seconds = parseTimeInput(event.target.value)
+                      if (seconds === null) return
+                      const nextStart = clampNumber(
+                        seconds,
+                        0,
+                        props.viewEndSec - MIN_ZOOM_HOURS * 3600,
+                      )
+                      props.setViewStartHour(nextStart / 3600)
+                      props.setZoomHours((props.viewEndSec - nextStart) / 3600)
+                    }}
+                  />
+                </label>
+                <label>
+                  <span className="timeline-control-label">结束</span>
+                  <input
+                    type="time"
+                    step={300}
+                    aria-label="结束时间"
+                    value={formatTimeInput(props.viewEndSec)}
+                    onChange={(event) => {
+                      const seconds = parseTimeInput(event.target.value)
+                      if (seconds === null) return
+                      const nextEnd = clampNumber(
+                        seconds,
+                        props.viewStartSec + MIN_ZOOM_HOURS * 3600,
+                        TIME_INPUT_MAX_SECONDS,
+                      )
+                      props.setZoomHours((nextEnd - props.viewStartSec) / 3600)
+                    }}
+                  />
+                </label>
               </div>
 
               <div className="timeline-control-group timeline-control-group-anchor">
@@ -440,14 +532,32 @@ const FocusSegmentList = memo(function FocusSegmentList(props: {
   onSelectSegment: (segment: ChartSegment) => void
   emptyLabel: string
 }) {
+  const [scrollTop, setScrollTop] = useState(0)
   if (props.segments.length === 0) {
     return <div className="empty-card">{props.emptyLabel}</div>
   }
 
+  const virtualized = props.segments.length > 200
+  const itemHeight = 70
+  const startIndex = virtualized ? Math.max(0, Math.floor(scrollTop / itemHeight) - 8) : 0
+  const endIndex = virtualized
+    ? Math.min(props.segments.length, startIndex + 40)
+    : props.segments.length
+  const visibleSegments = props.segments.slice(startIndex, endIndex)
+
   return (
-    <div className="detail-segment-list">
-      {props.segments.map((segment) => {
+    <div
+      className={`detail-segment-list ${virtualized ? 'is-virtualized' : ''}`}
+      onScroll={virtualized ? (event) => setScrollTop(event.currentTarget.scrollTop) : undefined}
+      style={virtualized ? { height: 560, overflowY: 'auto' } : undefined}
+    >
+      <div
+        className={virtualized ? 'detail-segment-virtual-space' : undefined}
+        style={virtualized ? { height: props.segments.length * itemHeight } : undefined}
+      >
+      {visibleSegments.map((segment, visibleIndex) => {
         const segmentDomain = props.browserDomainBySegmentId.get(segment.id) ?? null
+        const itemIndex = startIndex + visibleIndex
         return (
           <button
             key={segment.id}
@@ -455,6 +565,8 @@ const FocusSegmentList = memo(function FocusSegmentList(props: {
             className={`detail-segment-item ${
               props.hoveredSegmentId === segment.id ? 'is-hovered' : ''
             } ${props.focusedSegmentId === segment.id ? 'is-focused' : ''}`}
+            style={virtualized ? { position: 'absolute', top: itemIndex * itemHeight, left: 0, right: 0 } : undefined}
+            aria-label={`${segment.label}，${formatClockRange(segment.startSec, segment.endSec)}，时长 ${formatDuration(segment.durationSec)}`}
             title={[
               segment.label,
               segmentDomain ?? segment.detail,
@@ -485,6 +597,7 @@ const FocusSegmentList = memo(function FocusSegmentList(props: {
           </button>
         )
       })}
+      </div>
     </div>
   )
 })
@@ -503,4 +616,20 @@ function DetailListSkeleton() {
       ))}
     </div>
   )
+}
+
+function formatTimeInput(seconds: number) {
+  const clamped = clampNumber(Math.round(seconds / 60) * 60, 0, TIME_INPUT_MAX_SECONDS)
+  const hours = Math.floor(clamped / 3600)
+  const minutes = Math.floor((clamped % 3600) / 60)
+  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`
+}
+
+function parseTimeInput(value: string) {
+  const match = /^(\d{2}):(\d{2})$/.exec(value)
+  if (!match) return null
+  const hours = Number(match[1])
+  const minutes = Number(match[2])
+  if (hours > 23 || minutes > 59) return null
+  return hours * 3600 + minutes * 60
 }

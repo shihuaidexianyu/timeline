@@ -1,11 +1,6 @@
 /* Donut chart rendered with ECharts so tooltip, legend, and selection share one engine. */
 
 import { useMemo } from 'react'
-import ReactEChartsCoreImport from 'echarts-for-react/lib/core'
-import * as echarts from 'echarts/core'
-import { PieChart } from 'echarts/charts'
-import { GraphicComponent, TooltipComponent } from 'echarts/components'
-import { SVGRenderer } from 'echarts/renderers'
 import type { EChartsOption } from 'echarts'
 import {
   formatDuration,
@@ -13,17 +8,8 @@ import {
   type DashboardFilter,
   type DonutSlice,
 } from '../lib/chart-model'
-import { getEChartsPieBorderColor, getEChartsTooltipColors, getThemeColor } from '../lib/theme'
-
-echarts.use([PieChart, TooltipComponent, GraphicComponent, SVGRenderer])
-
-const ReactEChartsCore = (
-  typeof ReactEChartsCoreImport === 'object' &&
-    ReactEChartsCoreImport !== null &&
-    'default' in ReactEChartsCoreImport
-    ? (ReactEChartsCoreImport as { default: unknown }).default
-    : ReactEChartsCoreImport
-) as React.ComponentType<Record<string, unknown>>
+import { getEChartsThemeTokens, type ResolvedTheme } from '../lib/theme'
+import { echarts, ReactEChartsCore } from './echarts-runtime'
 
 const SANS_FAMILY = '"Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Segoe UI", sans-serif'
 const PIE_CENTER_X = '50%'
@@ -35,6 +21,7 @@ export function DonutChart(props: {
   slices: DonutSlice[]
   filter: DashboardFilter
   filterKind: 'app' | 'domain'
+  resolvedTheme: ResolvedTheme
   onSelect: (filter: DashboardFilter) => void
 }) {
   /** Show at most 5 slices in the legend; group the rest as "Others". */
@@ -49,9 +36,7 @@ export function DonutChart(props: {
   const rankingRows = isLoading ? placeholderSlices : rankingSlices
 
   const option = useMemo<EChartsOption>(() => {
-    const tooltipColors = getEChartsTooltipColors()
-    const pieBorder = getEChartsPieBorderColor()
-    const labelColor = getThemeColor('--text-main', '#1f2a37')
+    const theme = getEChartsThemeTokens(props.resolvedTheme)
     return {
       animation: !isLoading,
       animationDuration: 180,
@@ -63,11 +48,11 @@ export function DonutChart(props: {
         trigger: 'item',
         appendToBody: true,
         transitionDuration: 0.08,
-        backgroundColor: tooltipColors.backgroundColor,
-        borderColor: tooltipColors.borderColor,
+        backgroundColor: theme.panel,
+        borderColor: theme.border,
         borderWidth: 1,
         textStyle: {
-          color: labelColor,
+          color: theme.text,
           fontFamily: SANS_FAMILY,
         },
         formatter: (params) => {
@@ -95,7 +80,7 @@ export function DonutChart(props: {
           label: { show: false },
           labelLine: { show: false },
           itemStyle: {
-            borderColor: pieBorder,
+            borderColor: theme.panel,
             borderWidth: 1,
           },
           emphasis: {
@@ -133,6 +118,7 @@ export function DonutChart(props: {
     isLoading,
     props.filter,
     props.filterKind,
+    props.resolvedTheme,
     props.title,
   ])
 
@@ -238,6 +224,7 @@ export function CompactDonutChart(props: {
   onSelectKey?: (key: string) => void
   emptyLabel?: string
   height?: number
+  resolvedTheme: ResolvedTheme
 }) {
   const isLoading = Boolean(props.loading)
   const displaySlices = useMemo(
@@ -262,9 +249,7 @@ export function CompactDonutChart(props: {
   }, [chartSlices, isLoading, props.selectedKey])
 
   const option = useMemo<EChartsOption>(() => {
-    const tooltipColors = getEChartsTooltipColors()
-    const pieBorder = getEChartsPieBorderColor()
-    const labelColor = getThemeColor('--text-main', '#1f2a37')
+    const theme = getEChartsThemeTokens(props.resolvedTheme)
     return {
       animation: !isLoading,
       animationDuration: 180,
@@ -276,11 +261,11 @@ export function CompactDonutChart(props: {
         trigger: 'item',
         appendToBody: true,
         transitionDuration: 0.08,
-        backgroundColor: tooltipColors.backgroundColor,
-        borderColor: tooltipColors.borderColor,
+        backgroundColor: theme.panel,
+        borderColor: theme.border,
         borderWidth: 1,
         textStyle: {
-          color: labelColor,
+          color: theme.text,
           fontFamily: SANS_FAMILY,
         },
         formatter: (params) => {
@@ -309,7 +294,7 @@ export function CompactDonutChart(props: {
           label: { show: false },
           labelLine: { show: false },
           itemStyle: {
-            borderColor: pieBorder,
+            borderColor: theme.panel,
             borderWidth: 1,
           },
           emphasis: {
@@ -342,6 +327,7 @@ export function CompactDonutChart(props: {
     chartSlices,
     isLoading,
     props.onSelectKey,
+    props.resolvedTheme,
     props.selectedKey,
   ])
 

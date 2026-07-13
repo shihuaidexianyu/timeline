@@ -23,11 +23,13 @@ import {
     type DonutSlice,
 } from '../lib/chart-model'
 import type { WeekBarDatum } from '../lib/dashboard-helpers'
+import type { ResolvedTheme } from '../lib/theme'
 export type { WeekBarDatum } from '../lib/dashboard-helpers'
 
 export function StatsPage(props: {
     dashboard: DashboardModel | null
     loading: boolean
+    resolvedTheme: ResolvedTheme
     appFilter: DashboardFilter
     domainFilter: DashboardFilter
     setAppFilter: (value: DashboardFilter) => void
@@ -71,6 +73,7 @@ export function StatsPage(props: {
                     idleSeconds={presenceByKey.get('idle') ?? 0}
                     lockedSeconds={presenceByKey.get('locked') ?? 0}
                     refreshing={props.isTimelineRefreshing}
+                    resolvedTheme={props.resolvedTheme}
                 />
             </section>
 
@@ -106,6 +109,7 @@ export function StatsPage(props: {
                         <AppUsageTrendChart
                             trend={props.appTrend}
                             loading={props.loading || props.isAppTrendRefreshing}
+                            resolvedTheme={props.resolvedTheme}
                         />
                     )}
                 </div>
@@ -126,6 +130,7 @@ export function StatsPage(props: {
                         slices={props.dashboard?.appSlices ?? []}
                         filter={props.appFilter}
                         filterKind="app"
+                        resolvedTheme={props.resolvedTheme}
                         onSelect={props.setAppFilter}
                     />
                 </div>
@@ -144,6 +149,7 @@ export function StatsPage(props: {
                         slices={props.dashboard?.domainSlices ?? []}
                         filter={props.domainFilter}
                         filterKind="domain"
+                        resolvedTheme={props.resolvedTheme}
                         onSelect={props.setDomainFilter}
                     />
                 </div>
@@ -185,9 +191,9 @@ function WeeklyRhythmCard(props: {
 }) {
     const showLoadingSkeleton = props.loading && !props.periodSummary && props.weekBars.length === 0
     const weekActiveTotal = props.periodSummary?.week.active_seconds ?? 0
-    const weekFocusTotal = props.periodSummary?.week.focus_seconds ?? 0
+    const weekFocusTotal = props.periodSummary?.week.active_foreground_seconds ?? 0
     const monthActiveTotal = props.periodSummary?.month.active_seconds ?? 0
-    const monthFocusTotal = props.periodSummary?.month.focus_seconds ?? 0
+    const monthFocusTotal = props.periodSummary?.month.active_foreground_seconds ?? 0
     const bars = showLoadingSkeleton ? createWeeklySkeletonBars() : props.weekBars
 
     return (
@@ -235,7 +241,7 @@ function WeeklyRhythmCard(props: {
                         {showLoadingSkeleton ? (
                             <span className="skeleton-block skeleton-inline skeleton-stat-caption" />
                         ) : (
-                            `本周应用 · 当月 ${formatDuration(monthFocusTotal)}`
+                            `本周活跃应用 · 当月 ${formatDuration(monthFocusTotal)}`
                         )}
                     </small>
                 </div>
@@ -257,6 +263,7 @@ function FocusBalanceCard(props: {
     idleSeconds: number
     lockedSeconds: number
     refreshing: boolean
+    resolvedTheme: ResolvedTheme
 }) {
     const [selectedPresenceKey, setSelectedPresenceKey] = useState<'active' | 'idle' | 'locked'>('active')
     const selectedPresenceLabel =
@@ -325,6 +332,7 @@ function FocusBalanceCard(props: {
                             }}
                             height={232}
                             emptyLabel="所选日期没有状态分布数据"
+                            resolvedTheme={props.resolvedTheme}
                         />
                     </div>
                 </div>

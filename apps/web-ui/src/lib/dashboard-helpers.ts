@@ -1,7 +1,7 @@
 import type { DaySummary } from '../api'
 import type { ChartSegment } from './chart-model'
 
-export const MAX_ZOOM_HOURS = 8
+export const MAX_ZOOM_HOURS = 24
 export const MIN_ZOOM_HOURS = 1 / 12
 
 export type WeekBarDatum = {
@@ -82,7 +82,7 @@ export function buildWeekSeries(days: DaySummary[], selectedDate: string): WeekB
       date: dateKey,
       dayLabel: `${formatWeekday(date)} ${String(date.getUTCDate()).padStart(2, '0')}`,
       activeSeconds: summary?.active_seconds ?? 0,
-      focusSeconds: summary?.focus_seconds ?? 0,
+      focusSeconds: summary?.active_app_seconds ?? summary?.focus_seconds ?? 0,
       isSelected: dateKey === selectedDate,
     }
   })
@@ -136,15 +136,29 @@ export function buildPrimaryBrowserDomainMap(
   browserSegments: ChartSegment[],
 ) {
   const domainBySegmentId = new Map<string, string>()
+  const browserFocusSegments = focusSegments
+    .filter((segment) => segment.isBrowser)
+    .toSorted((left, right) => left.startSec - right.startSec || left.endSec - right.endSec)
+  const sortedBrowserSegments = browserSegments
+    .toSorted((left, right) => left.startSec - right.startSec || left.endSec - right.endSec)
+  let browserStartIndex = 0
 
-  for (const focusSegment of focusSegments) {
-    if (!focusSegment.isBrowser) {
-      continue
+  for (const focusSegment of browserFocusSegments) {
+    while (
+      browserStartIndex < sortedBrowserSegments.length &&
+      sortedBrowserSegments[browserStartIndex].endSec <= focusSegment.startSec
+    ) {
+      browserStartIndex += 1
     }
 
     const domainDurations = new Map<string, number>()
-
-    for (const browserSegment of browserSegments) {
+    for (
+      let browserIndex = browserStartIndex;
+      browserIndex < sortedBrowserSegments.length;
+      browserIndex += 1
+    ) {
+      const browserSegment = sortedBrowserSegments[browserIndex]
+      if (browserSegment.startSec >= focusSegment.endSec) break
       const overlapStart = Math.max(focusSegment.startSec, browserSegment.startSec)
       const overlapEnd = Math.min(focusSegment.endSec, browserSegment.endSec)
 

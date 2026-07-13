@@ -15,9 +15,12 @@ export type TimelineViewport = {
 export function useSelectedDateState(args: {
   agentToday: string | null
   agentTimezone: string | null
+  initialDate?: string | null
 }) {
-  const [selectedDate, setSelectedDate] = useState<string | null>(null)
-  const [calendarMonth, setCalendarMonth] = useState<string | null>(null)
+  const [selectedDate, setSelectedDate] = useState<string | null>(args.initialDate ?? null)
+  const [calendarMonth, setCalendarMonth] = useState<string | null>(
+    args.initialDate ? monthFromDate(args.initialDate) : null,
+  )
   const [zoomHours, setZoomHours] = useState<number>(0.5)
   const [viewStartHour, setViewStartHour] = useState(0)
 

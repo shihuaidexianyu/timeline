@@ -1,20 +1,29 @@
 //! Windows integration helpers for autostart, tray actions, and opening the web UI.
 
-use crate::state::AgentState;
+use crate::{
+    state::{AgentState, HealthReminderAction},
+    trackers::{pause_tracking, resume_tracking},
+};
 use anyhow::{Context, Result};
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 use tao::event::{Event, StartCause};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 #[cfg(target_os = "windows")]
 use tao::platform::windows::EventLoopBuilderExtWindows;
-use time::OffsetDateTime;
+use time::{OffsetDateTime, macros::format_description};
 use tracing::{error, info, warn};
 use tray_icon::{
     Icon, MouseButton, MouseButtonState, TrayIconBuilder,
     menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, accelerator::Accelerator},
+};
+use windows::Data::Xml::Dom::XmlDocument;
+use windows::Foundation::TypedEventHandler;
+use windows::UI::Notifications::{
+    ToastActivatedEventArgs, ToastNotification, ToastNotificationManager,
 };
 use windows::Win32::Foundation::{HWND, PROPERTYKEY, RPC_E_CHANGED_MODE};
 use windows::Win32::System::Com::StructuredStorage::{
@@ -31,14 +40,18 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MB_SETFOREGROUND, MB_TOPMOST, MessageBoxW,
     SW_SHOWNORMAL,
 };
-use windows::core::{GUID, Interface, PCWSTR, PWSTR};
+use windows::core::{GUID, HSTRING, IInspectable, Interface, PCWSTR, PWSTR};
 use winreg::RegKey;
 use winreg::enums::{HKEY_CURRENT_USER, KEY_READ};
-use winrt_notification::{Duration as ToastDuration, Sound, Toast};
 
 const AUTOSTART_REG_PATH: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const AUTOSTART_VALUE_NAME: &str = "Timeline";
 const MENU_OPEN_ID: &str = "open";
+const MENU_PAUSE_15_ID: &str = "pause_15";
+const MENU_PAUSE_60_ID: &str = "pause_60";
+const MENU_PAUSE_TOMORROW_ID: &str = "pause_tomorrow";
+const MENU_PAUSE_MANUAL_ID: &str = "pause_manual";
+const MENU_RESUME_ID: &str = "resume";
 const MENU_QUIT_ID: &str = "quit";
 const BREAK_REMINDER_TITLE: &str = "Timeline 健康提醒";
 pub const TOAST_APP_USER_MODEL_ID: &str = "com.timeline";
@@ -49,6 +62,23 @@ const PKEY_APP_USER_MODEL_ID: PROPERTYKEY = PROPERTYKEY {
     pid: 5,
 };
 
+struct ActiveBreakToast {
+    shown_at: Instant,
+    _notification: ToastNotification,
+}
+
+static ACTIVE_BREAK_TOASTS: OnceLock<StdMutex<Vec<ActiveBreakToast>>> = OnceLock::new();
+
+struct TrayMenuControls {
+    menu: Menu,
+    status: MenuItem,
+    pause_15: MenuItem,
+    pause_60: MenuItem,
+    pause_tomorrow: MenuItem,
+    pause_manual: MenuItem,
+    resume: MenuItem,
+}
+
 enum TrayUserEvent {
     TrayClick {
         button: MouseButton,
@@ -57,15 +87,41 @@ enum TrayUserEvent {
     Menu(MenuEvent),
 }
 
-pub fn autostart_enabled() -> Result<bool> {
+fn autostart_command() -> Result<Option<String>> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let key = match hkcu.open_subkey_with_flags(AUTOSTART_REG_PATH, KEY_READ) {
         Ok(key) => key,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error).context("failed to open HKCU Run key"),
     };
 
-    Ok(key.get_value::<String, _>(AUTOSTART_VALUE_NAME).is_ok())
+    match key.get_value::<String, _>(AUTOSTART_VALUE_NAME) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).context("failed to read autostart registry value"),
+    }
+}
+
+pub fn autostart_enabled(state: &AgentState) -> Result<bool> {
+    Ok(autostart_command()?
+        .is_some_and(|command| command.eq_ignore_ascii_case(&state.launch_command())))
+}
+
+pub fn reconcile_autostart_command(state: &AgentState) -> Result<()> {
+    let Some(command) = autostart_command()? else {
+        return Ok(());
+    };
+    if command.eq_ignore_ascii_case(&state.launch_command()) {
+        return Ok(());
+    }
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let (key, _) = hkcu
+        .create_subkey(AUTOSTART_REG_PATH)
+        .context("failed to open HKCU Run key for autostart repair")?;
+    key.set_value(AUTOSTART_VALUE_NAME, &state.launch_command())
+        .context("failed to repair autostart registry value")?;
+    Ok(())
 }
 
 pub fn set_autostart_enabled(state: &AgentState, enabled: bool) -> Result<bool> {
@@ -85,7 +141,7 @@ pub fn set_autostart_enabled(state: &AgentState, enabled: bool) -> Result<bool> 
         }
     }
 
-    autostart_enabled()
+    autostart_enabled(state)
 }
 
 /// Ensures a Start Menu shortcut exists with our AppUserModelID so Windows can
@@ -269,12 +325,23 @@ fn init_prop_variant_from_string(value: &str) -> Result<PROPVARIANT> {
     })
 }
 
-pub fn show_break_reminder(streak_secs: i64) {
+pub fn show_break_reminder(state: AgentState, streak_secs: i64) {
+    spawn_break_reminder(Some(state), streak_secs);
+}
+
+pub fn show_break_reminder_preview(streak_secs: i64) {
+    spawn_break_reminder(None, streak_secs);
+}
+
+fn spawn_break_reminder(state: Option<AgentState>, streak_secs: i64) {
     let active_minutes = ((streak_secs + 59) / 60).max(1);
     let message = format!("你已连续活跃约 {active_minutes} 分钟，建议起身活动 3-5 分钟。");
+    let action_context = state.map(|state| (state, tokio::runtime::Handle::current()));
 
     std::thread::spawn(move || {
-        if let Err(error) = show_break_reminder_toast(BREAK_REMINDER_TITLE, &message) {
+        if let Err(error) =
+            show_break_reminder_toast(action_context, BREAK_REMINDER_TITLE, &message)
+        {
             warn!(
                 ?error,
                 "failed to show break toast reminder, falling back to dialog"
@@ -289,23 +356,105 @@ pub fn show_break_reminder(streak_secs: i64) {
     });
 }
 
-fn show_break_reminder_toast(title: &str, message: &str) -> Result<()> {
-    Toast::new(TOAST_APP_USER_MODEL_ID)
-        .title(title)
-        .text1(message)
-        .duration(ToastDuration::Short)
-        .sound(Some(Sound::Default))
-        .show()
+fn show_break_reminder_toast(
+    action_context: Option<(AgentState, tokio::runtime::Handle)>,
+    title: &str,
+    message: &str,
+) -> Result<()> {
+    let document = XmlDocument::new().context("failed to create toast XML document")?;
+    let actions = if action_context.is_some() {
+        r#"<actions>
+                <action content="稍后 10 分钟" arguments="snooze_10_minutes" activationType="foreground" />
+                <action content="已休息" arguments="rested" activationType="foreground" />
+                <action content="今天不再提醒" arguments="dismiss_today" activationType="foreground" />
+            </actions>"#
+    } else {
+        ""
+    };
+    let xml = format!(
+        r#"<toast duration="short">
+            <visual><binding template="ToastGeneric"><text>{}</text><text>{}</text></binding></visual>
+            {}
+            <audio src="ms-winsoundevent:Notification.Default" />
+        </toast>"#,
+        escape_xml_text(title),
+        escape_xml_text(message),
+        actions,
+    );
+    document
+        .LoadXml(&HSTRING::from(xml))
+        .context("failed to load toast XML")?;
+    let notification = ToastNotification::CreateToastNotification(&document)
+        .context("failed to create Windows toast notification")?;
+    if let Some((action_state, runtime_handle)) = action_context {
+        let handler =
+            TypedEventHandler::<ToastNotification, IInspectable>::new(move |_sender, args| {
+                let args = args.ok()?.cast::<ToastActivatedEventArgs>()?;
+                let action = match args.Arguments()?.to_string().as_str() {
+                    "snooze_10_minutes" => Some(HealthReminderAction::SnoozeTenMinutes),
+                    "rested" => Some(HealthReminderAction::Rested),
+                    "dismiss_today" => Some(HealthReminderAction::DismissToday),
+                    _ => None,
+                };
+                if let Some(action) = action {
+                    let state = action_state.clone();
+                    runtime_handle.spawn(async move {
+                        let observed_at = OffsetDateTime::now_utc();
+                        state
+                            .apply_health_reminder_action(action, observed_at)
+                            .await;
+                        if let Err(error) = state
+                            .store()
+                            .append_raw_event(
+                                "health_break_reminder_action",
+                                &serde_json::json!({ "action": action.as_str() }),
+                                observed_at,
+                            )
+                            .await
+                        {
+                            warn!(?error, "failed to persist health reminder action");
+                        }
+                    });
+                }
+                Ok(())
+            });
+        notification
+            .Activated(&handler)
+            .context("failed to register toast action handler")?;
+    }
+
+    ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(TOAST_APP_USER_MODEL_ID))
+        .context("failed to create Windows toast notifier")?
+        .Show(&notification)
         .context("failed to show Windows toast reminder")?;
 
+    let mut active_toasts = ACTIVE_BREAK_TOASTS
+        .get_or_init(|| StdMutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    active_toasts.retain(|toast| toast.shown_at.elapsed() < Duration::from_secs(24 * 60 * 60));
+    active_toasts.push(ActiveBreakToast {
+        shown_at: Instant::now(),
+        _notification: notification,
+    });
+
     Ok(())
+}
+
+fn escape_xml_text(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }
 
 fn show_break_reminder_dialog(title: &str, message: &str) -> Result<()> {
     show_message_box(
         title,
         message,
-        MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST,
+        MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND,
     )
 }
 
@@ -341,14 +490,15 @@ fn show_message_box(
 }
 
 pub fn spawn_tray(state: AgentState) {
+    let runtime_handle = tokio::runtime::Handle::current();
     std::thread::spawn(move || {
-        if let Err(error) = run_tray_loop(state) {
+        if let Err(error) = run_tray_loop(state, runtime_handle) {
             error!(?error, "tray loop stopped");
         }
     });
 }
 
-fn run_tray_loop(state: AgentState) -> Result<()> {
+fn run_tray_loop(state: AgentState, runtime_handle: tokio::runtime::Handle) -> Result<()> {
     let mut event_loop_builder = EventLoopBuilder::<TrayUserEvent>::with_user_event();
     #[cfg(target_os = "windows")]
     event_loop_builder.with_any_thread(true);
@@ -357,6 +507,11 @@ fn run_tray_loop(state: AgentState) -> Result<()> {
     let tray_menu = build_tray_menu();
     let tray_icon = build_tray_icon(&state).context("failed to build tray icon image")?;
     let open_id = MenuId::new(MENU_OPEN_ID);
+    let pause_15_id = MenuId::new(MENU_PAUSE_15_ID);
+    let pause_60_id = MenuId::new(MENU_PAUSE_60_ID);
+    let pause_tomorrow_id = MenuId::new(MENU_PAUSE_TOMORROW_ID);
+    let pause_manual_id = MenuId::new(MENU_PAUSE_MANUAL_ID);
+    let resume_id = MenuId::new(MENU_RESUME_ID);
     let quit_id = MenuId::new(MENU_QUIT_ID);
 
     let proxy = event_loop.create_proxy();
@@ -379,10 +534,10 @@ fn run_tray_loop(state: AgentState) -> Result<()> {
         let _ = proxy.send_event(TrayUserEvent::Menu(event));
     }));
 
-    let _tray = TrayIconBuilder::new()
+    let tray = TrayIconBuilder::new()
         .with_tooltip("Timeline")
         .with_icon(tray_icon)
-        .with_menu(Box::new(tray_menu))
+        .with_menu(Box::new(tray_menu.menu.clone()))
         .with_menu_on_left_click(false)
         .build()
         .context("failed to create tray icon")?;
@@ -391,6 +546,7 @@ fn run_tray_loop(state: AgentState) -> Result<()> {
     info!("tray icon started");
 
     let state_for_loop = state.clone();
+    let mut last_pause_state = None;
     event_loop.run(move |event, _, control_flow| {
         // Poll at 250ms to keep tray responsive while avoiding excessive CPU usage.
         *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(250));
@@ -398,6 +554,20 @@ fn run_tray_loop(state: AgentState) -> Result<()> {
         if state_for_loop.shutdown_requested() {
             *control_flow = ControlFlow::Exit;
             return;
+        }
+
+        let pause_state = state_for_loop.tracking_pause_state_blocking();
+        if last_pause_state != Some(pause_state) {
+            update_tray_tracking_controls(&state_for_loop, &tray_menu, pause_state);
+            let tooltip = if pause_state.0 {
+                "Timeline · 采集已暂停"
+            } else {
+                "Timeline · 正在采集"
+            };
+            if let Err(error) = tray.set_tooltip(Some(tooltip)) {
+                warn!(?error, "failed to update tray tooltip");
+            }
+            last_pause_state = Some(pause_state);
         }
 
         match event {
@@ -424,6 +594,43 @@ fn run_tray_loop(state: AgentState) -> Result<()> {
                 } else if menu_event.id == quit_id {
                     state_for_loop.request_shutdown();
                     *control_flow = ControlFlow::Exit;
+                } else if menu_event.id == resume_id {
+                    if let Err(error) = runtime_handle.block_on(resume_tracking(&state_for_loop)) {
+                        warn!(?error, "failed to resume tracking from tray");
+                    }
+                } else if menu_event.id == pause_15_id {
+                    let until = OffsetDateTime::now_utc() + time::Duration::minutes(15);
+                    if let Err(error) =
+                        runtime_handle.block_on(pause_tracking(&state_for_loop, Some(until)))
+                    {
+                        warn!(?error, "failed to pause tracking from tray");
+                    }
+                } else if menu_event.id == pause_60_id {
+                    let until = OffsetDateTime::now_utc() + time::Duration::hours(1);
+                    if let Err(error) =
+                        runtime_handle.block_on(pause_tracking(&state_for_loop, Some(until)))
+                    {
+                        warn!(?error, "failed to pause tracking from tray");
+                    }
+                } else if menu_event.id == pause_tomorrow_id {
+                    match state_for_loop
+                        .store()
+                        .next_local_midnight(OffsetDateTime::now_utc())
+                    {
+                        Ok(until) => {
+                            if let Err(error) = runtime_handle
+                                .block_on(pause_tracking(&state_for_loop, Some(until)))
+                            {
+                                warn!(?error, "failed to pause tracking from tray");
+                            }
+                        }
+                        Err(error) => warn!(?error, "failed to calculate next local midnight"),
+                    }
+                } else if menu_event.id == pause_manual_id
+                    && let Err(error) =
+                        runtime_handle.block_on(pause_tracking(&state_for_loop, None))
+                {
+                    warn!(?error, "failed to pause tracking from tray");
                 }
             }
             _ => {}
@@ -431,17 +638,88 @@ fn run_tray_loop(state: AgentState) -> Result<()> {
     });
 }
 
-fn build_tray_menu() -> Menu {
+fn build_tray_menu() -> TrayMenuControls {
     let menu = Menu::new();
     let open_item = MenuItem::with_id(MENU_OPEN_ID, "打开时间线", true, None::<Accelerator>);
+    let status = MenuItem::new("采集状态：正在采集", false, None::<Accelerator>);
+    let pause_15 = MenuItem::with_id(MENU_PAUSE_15_ID, "暂停 15 分钟", true, None::<Accelerator>);
+    let pause_60 = MenuItem::with_id(MENU_PAUSE_60_ID, "暂停 1 小时", true, None::<Accelerator>);
+    let pause_tomorrow = MenuItem::with_id(
+        MENU_PAUSE_TOMORROW_ID,
+        "暂停到明天",
+        true,
+        None::<Accelerator>,
+    );
+    let pause_manual = MenuItem::with_id(
+        MENU_PAUSE_MANUAL_ID,
+        "暂停到手动恢复",
+        true,
+        None::<Accelerator>,
+    );
+    let resume = MenuItem::with_id(MENU_RESUME_ID, "恢复采集", false, None::<Accelerator>);
     let quit_item = MenuItem::with_id(MENU_QUIT_ID, "退出", true, None::<Accelerator>);
     menu.append(&open_item)
         .expect("failed to append open menu item");
     menu.append(&PredefinedMenuItem::separator())
         .expect("failed to append tray separator");
+    for item in [
+        &status,
+        &pause_15,
+        &pause_60,
+        &pause_tomorrow,
+        &pause_manual,
+        &resume,
+    ] {
+        menu.append(item)
+            .expect("failed to append tracking menu item");
+    }
+    menu.append(&PredefinedMenuItem::separator())
+        .expect("failed to append tray separator");
     menu.append(&quit_item)
         .expect("failed to append quit menu item");
-    menu
+    TrayMenuControls {
+        menu,
+        status,
+        pause_15,
+        pause_60,
+        pause_tomorrow,
+        pause_manual,
+        resume,
+    }
+}
+
+fn update_tray_tracking_controls(
+    state: &AgentState,
+    controls: &TrayMenuControls,
+    (paused, _paused_since, pause_until): (bool, Option<OffsetDateTime>, Option<OffsetDateTime>),
+) {
+    let status = if paused {
+        pause_until
+            .map(|until| {
+                let local = state
+                    .store()
+                    .local_offset_at(until)
+                    .map(|offset| until.to_offset(offset))
+                    .unwrap_or(until);
+                let formatted = local
+                    .format(format_description!("[year]-[month]-[day] [hour]:[minute]"))
+                    .unwrap_or_else(|_| local.to_string());
+                format!("采集状态：已暂停至 {formatted}")
+            })
+            .unwrap_or_else(|| "采集状态：已暂停".to_string())
+    } else {
+        "采集状态：正在采集".to_string()
+    };
+    controls.status.set_text(status);
+    for item in [
+        &controls.pause_15,
+        &controls.pause_60,
+        &controls.pause_tomorrow,
+        &controls.pause_manual,
+    ] {
+        item.set_enabled(!paused);
+    }
+    controls.resume.set_enabled(paused);
 }
 
 /// Builds the tray icon from the same executable icon resource so tray/exe keep

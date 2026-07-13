@@ -43,6 +43,7 @@ pub enum PresenceState {
     Active,
     Idle,
     Locked,
+    Paused,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,6 +103,8 @@ pub struct DurationStat {
     pub label: String,
     pub seconds: i64,
     pub percentage: f64,
+    pub active_seconds: i64,
+    pub active_percentage: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,6 +114,22 @@ pub struct FocusStats {
     pub switch_count: i64,
     pub longest_focus_block_seconds: i64,
     pub average_focus_block_seconds: i64,
+    pub foreground_seconds: i64,
+    pub active_foreground_seconds: i64,
+    pub active_switch_count: i64,
+    pub longest_active_block_seconds: i64,
+    pub average_active_block_seconds: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveRollupStatus {
+    pub status: String,
+    pub completed_days: i64,
+    pub total_days: i64,
+    pub next_date: Option<String>,
+    pub last_error: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub updated_at: Option<OffsetDateTime>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -122,6 +141,9 @@ pub struct HealthResponse {
     pub database_path: String,
     pub listen_addr: String,
     pub timezone: String,
+    pub version: String,
+    pub schema_version: i64,
+    pub rollup_algorithm_version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,6 +154,15 @@ pub struct AgentMonitorStatus {
     pub detail: String,
     #[serde(with = "time::serde::rfc3339::option")]
     pub last_seen: Option<OffsetDateTime>,
+    pub last_error: Option<String>,
+    pub consecutive_failures: u32,
+    pub restart_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecentTrackedItem {
+    pub key: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,11 +175,58 @@ pub struct AgentSettingsResponse {
     pub poll_interval_millis: u64,
     pub health_reminder_enabled: bool,
     pub health_reminder_threshold_secs: u64,
+    pub health_reminder_work_start: Option<String>,
+    pub health_reminder_work_end: Option<String>,
+    pub health_reminder_quiet_start: Option<String>,
+    pub health_reminder_quiet_end: Option<String>,
     pub record_window_titles: bool,
     pub record_page_titles: bool,
     pub ignored_apps: Vec<String>,
     pub ignored_domains: Vec<String>,
+    pub recent_apps: Vec<RecentTrackedItem>,
+    pub recent_domains: Vec<RecentTrackedItem>,
     pub monitors: Vec<AgentMonitorStatus>,
+    pub tracking_paused: bool,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub paused_since: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub pause_until: Option<OffsetDateTime>,
+    pub retention_days: Option<u32>,
+    pub database_size_bytes: u64,
+    pub earliest_recorded_date: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub last_backup_at: Option<OffsetDateTime>,
+    pub version: String,
+    pub schema_version: i64,
+    pub active_rollup_status: ActiveRollupStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PauseTrackingRequest {
+    pub duration_secs: Option<u64>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub until: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrackingStateResponse {
+    pub tracking_paused: bool,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub paused_since: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub pause_until: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateRetentionRequest {
+    pub retention_days: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteDataRequest {
+    pub from: Option<String>,
+    pub to: Option<String>,
+    pub all: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,6 +245,14 @@ pub struct UpdateAgentConfigRequest {
     pub poll_interval_millis: u64,
     pub health_reminder_enabled: bool,
     pub health_reminder_threshold_secs: u64,
+    #[serde(default)]
+    pub health_reminder_work_start: Option<String>,
+    #[serde(default)]
+    pub health_reminder_work_end: Option<String>,
+    #[serde(default)]
+    pub health_reminder_quiet_start: Option<String>,
+    #[serde(default)]
+    pub health_reminder_quiet_end: Option<String>,
     pub record_window_titles: bool,
     pub record_page_titles: bool,
     pub ignored_apps: Vec<String>,
@@ -222,6 +308,9 @@ pub struct DaySummary {
     pub active_seconds: i64,
     pub browser_seconds: i64,
     pub switch_count: i64,
+    pub active_app_seconds: i64,
+    pub active_browser_seconds: i64,
+    pub active_switch_count: i64,
     pub top_app: Option<KeyedDurationEntry>,
     pub top_domain: Option<KeyedDurationEntry>,
 }
@@ -232,6 +321,7 @@ pub struct MonthCalendarResponse {
     pub month: String,
     pub timezone: String,
     pub days: Vec<DaySummary>,
+    pub active_rollup_status: ActiveRollupStatus,
 }
 
 /// Focus and active totals for a time period (today / week / month).
@@ -239,6 +329,8 @@ pub struct MonthCalendarResponse {
 pub struct PeriodStat {
     pub focus_seconds: i64,
     pub active_seconds: i64,
+    pub foreground_seconds: i64,
+    pub active_foreground_seconds: i64,
 }
 
 /// GET /api/stats/summary response — today, this week, and this month totals.
@@ -249,6 +341,7 @@ pub struct PeriodSummaryResponse {
     pub today: PeriodStat,
     pub week: PeriodStat,
     pub month: PeriodStat,
+    pub active_rollup_status: ActiveRollupStatus,
 }
 
 /// Supported periods for application usage trend charts.
@@ -266,6 +359,8 @@ pub struct AppUsageTrendSeries {
     pub label: String,
     pub total_seconds: i64,
     pub daily_seconds: Vec<i64>,
+    pub active_total_seconds: i64,
+    pub active_daily_seconds: Vec<i64>,
 }
 
 /// GET /api/stats/apps/trend response — Top N applications by daily usage.
@@ -277,4 +372,5 @@ pub struct AppUsageTrendResponse {
     pub timezone: String,
     pub days: Vec<String>,
     pub series: Vec<AppUsageTrendSeries>,
+    pub active_rollup_status: ActiveRollupStatus,
 }

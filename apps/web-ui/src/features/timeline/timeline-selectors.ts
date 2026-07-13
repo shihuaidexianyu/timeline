@@ -18,6 +18,7 @@ export function filterTimelineFocusSegments(
   browserDomainBySegmentId: ReadonlyMap<string, string>,
   normalizedSearchQuery: string,
   segmentKind: TimelineSegmentKind,
+  searchTextBySegmentId?: ReadonlyMap<string, string>,
 ) {
   return segments.filter((segment) =>
     matchesTimelineFilter(
@@ -25,6 +26,7 @@ export function filterTimelineFocusSegments(
       browserDomainBySegmentId.get(segment.id) ?? null,
       normalizedSearchQuery,
       segmentKind,
+      searchTextBySegmentId?.get(segment.id),
     ),
   )
 }
@@ -34,6 +36,7 @@ export function matchesTimelineFilter(
   domain: string | null,
   normalizedSearchQuery: string,
   segmentKind: TimelineSegmentKind,
+  precomputedSearchText?: string,
 ) {
   if (segmentKind === 'app' && segment.isBrowser) {
     return false
@@ -47,9 +50,15 @@ export function matchesTimelineFilter(
     return true
   }
 
-  return [segment.label, segment.key, segment.detail, domain].some((value) =>
-    normalizeTimelineSearchQuery(value).includes(normalizedSearchQuery),
+  return (precomputedSearchText ?? buildTimelineSearchText(segment, domain)).includes(
+    normalizedSearchQuery,
   )
+}
+
+export function buildTimelineSearchText(segment: ChartSegment, domain: string | null) {
+  return [segment.label, segment.key, segment.detail, domain]
+    .map(normalizeTimelineSearchQuery)
+    .join('\n')
 }
 
 export function normalizeTimelineSearchQuery(value: string | null | undefined) {

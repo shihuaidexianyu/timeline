@@ -8,8 +8,11 @@ export const PAGE_ITEMS = [
 
 export type AppPage = (typeof PAGE_ITEMS)[number]['id']
 
-export function useHashRoute(): [AppPage, (page: AppPage) => void] {
-  const [page, setPage] = useState<AppPage>(() => pageFromHash(window.location.hash))
+export function useHashRoute(): [AppPage, (page: AppPage) => void, string] {
+  const [route, setRoute] = useState(() => ({
+    page: pageFromHash(window.location.hash),
+    hash: window.location.hash,
+  }))
 
   useEffect(() => {
     if (!window.location.hash) {
@@ -17,7 +20,7 @@ export function useHashRoute(): [AppPage, (page: AppPage) => void] {
     }
 
     function handleHashChange() {
-      setPage(pageFromHash(window.location.hash))
+      setRoute({ page: pageFromHash(window.location.hash), hash: window.location.hash })
     }
 
     window.addEventListener('hashchange', handleHashChange)
@@ -27,20 +30,43 @@ export function useHashRoute(): [AppPage, (page: AppPage) => void] {
   }, [])
 
   return [
-    page,
+    route.page,
     (nextPage) => {
-      window.location.hash = `#/${nextPage}`
-      setPage(nextPage)
+      const date = dateFromHash(window.location.hash)
+      window.location.hash = buildHash(nextPage, date)
+      setRoute({ page: nextPage, hash: window.location.hash })
     },
+    route.hash,
   ]
 }
 
 export function pageFromHash(hash: string): AppPage {
-  const normalized = hash.replace(/^#\/?/, '')
+  const normalized = hash.replace(/^#\/?/, '').split('?')[0]
   if (normalized === 'timeline' || normalized === 'settings' || normalized === 'stats') {
     return normalized
   }
   return 'stats'
+}
+
+export function dateFromHash(hash: string): string | null {
+  const query = hash.split('?')[1]
+  if (!query) return null
+  const value = new URLSearchParams(query).get('date')
+  return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : null
+}
+
+export function setHashDate(page: AppPage, date: string) {
+  window.location.hash = buildHash(page, date)
+}
+
+export function replaceHashDate(page: AppPage, date: string) {
+  const nextHash = buildHash(page, date)
+  window.history.replaceState(null, '', nextHash)
+  window.dispatchEvent(new HashChangeEvent('hashchange'))
+}
+
+function buildHash(page: AppPage, date: string | null) {
+  return date ? `#/${page}?date=${encodeURIComponent(date)}` : `#/${page}`
 }
 
 export function pageMeta(page: AppPage) {

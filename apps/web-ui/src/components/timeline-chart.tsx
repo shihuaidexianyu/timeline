@@ -361,7 +361,8 @@ export function TimelineChart(props: {
                         shouldDim
 
                       return (
-                        <span
+                        <button
+                          type="button"
                           key={segment.id}
                           className={`timeline-bar ${shouldDimForHighlight ? 'is-dimmed' : ''} ${isHighlighted ? 'is-highlighted' : ''}`}
                           style={{
@@ -370,8 +371,11 @@ export function TimelineChart(props: {
                             background: segment.color,
                           }}
                           title={buildTooltipText(segment)}
+                          aria-label={buildTooltipText(segment)}
                           onPointerEnter={() => props.onSegmentHover?.(segment.id)}
                           onPointerLeave={() => props.onSegmentHover?.(null)}
+                          onFocus={() => props.onSegmentHover?.(segment.id)}
+                          onBlur={() => props.onSegmentHover?.(null)}
                         />
                       )
                     })}

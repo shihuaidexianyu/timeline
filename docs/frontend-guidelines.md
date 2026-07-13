@@ -60,6 +60,32 @@
 - 首屏：无数据可显示同构骨架。
 - 刷新：有旧数据时继续显示旧数据，仅做局部更新标识（如 refresh badge）。
 
+## 3.3 路由、日期与轮询
+
+- 日期必须写入 Hash 查询参数（`#/timeline?date=YYYY-MM-DD`）；浏览器前进/后退时 URL 是日期状态源。
+- 今天的时间线和汇总每 10 秒刷新，历史日期不轮询；设置页监视器每 5 秒刷新。
+- React Query 默认在页面不可见时暂停 interval，不要开启后台轮询。
+- 午夜 rollover 必须更新今天的 query key；若用户仍停留在旧“今天”，自动切换到新日期。
+
+## 3.4 图表主题与加载边界
+
+- ECharts 只能从 `components/echarts-runtime.ts` 注册和导入，统计页以外不得加载 ECharts chunk。
+- 图表 option 使用显式 `resolvedTheme` 和纯色 token，不在 chart model 或 `useMemo` 内读取 DOM 计算样式。
+- 主题变化必须进入 option 的 memo 依赖，切换后立即更新 tooltip、坐标轴和网格颜色。
+
+## 3.5 时间线性能
+
+- 搜索输入使用 `useDeferredValue`，每条 segment 的搜索文本预计算，避免每次按键重复归一化。
+- 应用/域名区间关联使用时间排序 interval sweep，不得恢复为 `O(F×B)` 双重全表扫描。
+- 大于 200 条的事件列表使用虚拟窗口；普通长列表使用 `content-visibility:auto`。
+
+## 3.6 无障碍与响应式
+
+- 页面只允许一个 `h1`，区块标题从 `h2` 开始，禁止跳级。
+- ECharts 提供文本摘要或视觉隐藏数据表；时间线条必须可聚焦并说明名称、时间和时长。
+- 时间窗口控制柄使用 `role="slider"`、`aria-value*` 和键盘增减。
+- 尊重 `prefers-reduced-motion`；小屏导航改为紧凑横向布局，交互目标最小 44px。
+
 ## 4. Skeleton 实施清单
 
 每次新增/重构卡片时，至少验证以下项：

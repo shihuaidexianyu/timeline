@@ -1,32 +1,47 @@
 //! Axum routes for health checks, timelines, stats, browser event ingestion, and settings.
 
-use crate::{state::AgentState, system, trackers::sync_browser_event};
+use crate::{
+    config::validate_optional_time_window,
+    state::{AgentState, MonitorProbe},
+    system,
+    trackers::{pause_tracking, reconcile_runtime_config, resume_tracking, sync_browser_event},
+};
 use anyhow::Result;
+use axum::body::Body;
 use axum::extract::{Query, Request, State};
-use axum::http::header::{CONTENT_TYPE, HeaderName, ORIGIN};
+use axum::http::header::{CONTENT_DISPOSITION, CONTENT_TYPE, HeaderName, ORIGIN};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{Html, IntoResponse, Response};
 use axum::{
     Json, Router,
-    routing::{get, post},
+    routing::{any, get, post},
 };
 use common::{
     AgentMonitorStatus, AgentSettingsResponse, ApiResponse, AppUsageTrendResponse,
-    BrowserEventPayload, HealthResponse, MonthCalendarResponse, PeriodSummaryResponse, TrendPeriod,
+    BrowserEventPayload, DeleteDataRequest, HealthResponse, MonthCalendarResponse,
+    PauseTrackingRequest, PeriodSummaryResponse, TrackingStateResponse, TrendPeriod,
     UpdateAgentConfigRequest, UpdateAgentConfigResponse, UpdateAutostartRequest,
-    UpdateAutostartResponse,
+    UpdateAutostartResponse, UpdateRetentionRequest,
 };
 use serde::Deserialize;
+use std::net::IpAddr;
 use time::format_description::parse;
 use time::{Date, Duration, OffsetDateTime};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
+use tracing::warn;
 
 const EXTENSION_HEADER: &str = "x-timeline-extension";
 const EXTENSION_HEADER_VALUE: &str = "browser-bridge";
 /// How many raw events to return in the debug endpoint.
 const DEBUG_RECENT_EVENTS_LIMIT: i64 = 30;
+const MAX_BROWSER_DOMAIN_LENGTH: usize = 253;
+const MAX_BROWSER_TITLE_LENGTH: usize = 512;
+const MAX_IGNORED_ITEMS: usize = 256;
+const MAX_IGNORED_ITEM_LENGTH: usize = 253;
+const BROWSER_EVENT_MAX_PAST_SKEW: Duration = Duration::minutes(2);
+const BROWSER_EVENT_MAX_FUTURE_SKEW: Duration = Duration::seconds(10);
 
 pub fn build_router(state: AgentState) -> Router {
     let router = Router::new()
@@ -41,8 +56,15 @@ pub fn build_router(state: AgentState) -> Router {
         .route("/api/settings/config", post(post_update_agent_config))
         .route("/api/debug/recent-events", get(get_recent_events))
         .route("/api/events/browser", post(post_browser_event))
+        .route("/api/tracking/pause", post(post_pause_tracking))
+        .route("/api/tracking/resume", post(post_resume_tracking))
+        .route("/api/data/retention", post(post_retention))
+        .route("/api/data/export", get(get_data_export))
+        .route("/api/data/backup", get(get_data_backup))
+        .route("/api/data/delete", post(post_data_delete))
         .route("/api/calendar/month", get(get_month_calendar))
         .route("/api/stats/summary", get(get_period_summary))
+        .route("/api/{*path}", any(api_not_found))
         .layer(middleware::from_fn(validate_request_origin))
         .layer(build_cors_layer())
         .with_state(state.clone());
@@ -71,6 +93,13 @@ struct AppTrendQuery {
     limit: Option<usize>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ExportQuery {
+    format: Option<String>,
+    from: String,
+    to: String,
+}
+
 async fn get_health(
     State(state): State<AgentState>,
 ) -> Result<Json<ApiResponse<HealthResponse>>, AppError> {
@@ -80,7 +109,10 @@ async fn get_health(
         started_at: state.started_at(),
         database_path: state.config().database_path.display().to_string(),
         listen_addr: state.config().listen_addr.clone(),
-        timezone: state.timezone().to_string(),
+        timezone: state.store().timezone_id(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        schema_version: state.store().schema_version().await?,
+        rollup_algorithm_version: crate::db::ACTIVE_ROLLUP_ALGORITHM_VERSION.to_string(),
     })))
 }
 
@@ -89,10 +121,57 @@ async fn get_timeline_day(
     Query(query): Query<DayQuery>,
 ) -> Result<Json<ApiResponse<common::TimelineDayResponse>>, AppError> {
     let date = parse_or_today(query.date.as_deref(), state.timezone())?;
-    let timeline = state
+    let runtime_config = state.runtime_config_snapshot().await;
+    let open_segment_grace =
+        Duration::milliseconds((runtime_config.poll_interval_millis * 4) as i64);
+    let mut timeline = state
         .store()
-        .read_day_timeline(date, state.timezone())
+        .read_day_timeline(date, state.timezone(), open_segment_grace)
         .await?;
+    let now = OffsetDateTime::now_utc();
+    if date == now.to_offset(state.timezone()).date() {
+        let (focus, browser, presence) = {
+            let runtime = state.runtime().await;
+            (
+                runtime
+                    .current_focus
+                    .as_ref()
+                    .map(|segment| (segment.id, segment.last_observed_at)),
+                runtime
+                    .current_browser
+                    .as_ref()
+                    .map(|segment| (segment.id, segment.last_observed_at)),
+                runtime
+                    .current_presence
+                    .as_ref()
+                    .map(|segment| (segment.id, segment.last_observed_at)),
+            )
+        };
+        if let Some((id, last_observed_at)) = focus
+            && let Some(segment) = timeline
+                .focus_segments
+                .iter_mut()
+                .find(|segment| segment.id == id)
+        {
+            segment.ended_at = Some(std::cmp::min(now, last_observed_at + open_segment_grace));
+        }
+        if let Some((id, last_observed_at)) = browser
+            && let Some(segment) = timeline
+                .browser_segments
+                .iter_mut()
+                .find(|segment| segment.id == id)
+        {
+            segment.ended_at = Some(std::cmp::min(now, last_observed_at + open_segment_grace));
+        }
+        if let Some((id, last_observed_at)) = presence
+            && let Some(segment) = timeline
+                .presence_segments
+                .iter_mut()
+                .find(|segment| segment.id == id)
+        {
+            segment.ended_at = Some(std::cmp::min(now, last_observed_at + open_segment_grace));
+        }
+    }
     Ok(Json(ApiResponse::ok(timeline)))
 }
 
@@ -135,9 +214,12 @@ async fn get_focus_stats(
     Query(query): Query<DayQuery>,
 ) -> Result<Json<ApiResponse<common::FocusStats>>, AppError> {
     let date = parse_or_today(query.date.as_deref(), state.timezone())?;
+    let runtime_config = state.runtime_config_snapshot().await;
+    let open_segment_grace =
+        Duration::milliseconds((runtime_config.poll_interval_millis * 4) as i64);
     let stats = state
         .store()
-        .read_focus_stats(date, state.timezone())
+        .read_focus_stats(date, state.timezone(), open_segment_grace)
         .await?;
     Ok(Json(ApiResponse::ok(stats)))
 }
@@ -155,9 +237,15 @@ async fn get_recent_events(
 async fn get_settings(
     State(state): State<AgentState>,
 ) -> Result<Json<ApiResponse<AgentSettingsResponse>>, AppError> {
-    let autostart_enabled = system::autostart_enabled()?;
+    let autostart_enabled = system::autostart_enabled(&state)?;
     let runtime_config = state.runtime_config_snapshot().await;
     let monitors = build_monitor_statuses(&state).await;
+    let (tracking_paused, paused_since, pause_until) = state.tracking_pause_state().await;
+    let retention_days = state
+        .store()
+        .runtime_setting("retention_days")
+        .await?
+        .and_then(|value| value.parse().ok());
 
     Ok(Json(ApiResponse::ok(AgentSettingsResponse {
         autostart_enabled,
@@ -168,12 +256,181 @@ async fn get_settings(
         poll_interval_millis: runtime_config.poll_interval_millis,
         health_reminder_enabled: runtime_config.health_reminder_enabled,
         health_reminder_threshold_secs: runtime_config.health_reminder_threshold_secs,
+        health_reminder_work_start: runtime_config.health_reminder_work_start,
+        health_reminder_work_end: runtime_config.health_reminder_work_end,
+        health_reminder_quiet_start: runtime_config.health_reminder_quiet_start,
+        health_reminder_quiet_end: runtime_config.health_reminder_quiet_end,
         record_window_titles: runtime_config.record_window_titles,
         record_page_titles: runtime_config.record_page_titles,
         ignored_apps: runtime_config.ignored_apps,
         ignored_domains: runtime_config.ignored_domains,
+        recent_apps: state.store().recent_apps(20).await?,
+        recent_domains: state.store().recent_domains(20).await?,
         monitors,
+        tracking_paused,
+        paused_since,
+        pause_until,
+        retention_days,
+        database_size_bytes: state.store().database_size_bytes().await?,
+        earliest_recorded_date: state.store().earliest_recorded_date().await?,
+        last_backup_at: state.store().last_backup_at().await?,
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        schema_version: state.store().schema_version().await?,
+        active_rollup_status: state.store().active_rollup_status().await?,
     })))
+}
+
+async fn post_pause_tracking(
+    State(state): State<AgentState>,
+    Json(payload): Json<PauseTrackingRequest>,
+) -> Result<Json<ApiResponse<TrackingStateResponse>>, AppError> {
+    if payload.duration_secs.is_some() && payload.until.is_some() {
+        return Err(AppError::bad_request(
+            "conflicting_pause_deadline",
+            "duration_secs and until cannot be provided together",
+        ));
+    }
+    if payload.duration_secs == Some(0) {
+        return Err(AppError::bad_request(
+            "invalid_pause_duration",
+            "duration_secs must be greater than zero",
+        ));
+    }
+    let now = OffsetDateTime::now_utc();
+    let pause_until = match (payload.duration_secs, payload.until) {
+        (Some(seconds), None) => Some(
+            now.checked_add(Duration::seconds(seconds.min(86_400 * 30) as i64))
+                .ok_or_else(|| {
+                    AppError::bad_request(
+                        "invalid_pause_duration",
+                        "pause deadline is out of range",
+                    )
+                })?,
+        ),
+        (None, Some(until)) if until <= now => {
+            return Err(AppError::bad_request(
+                "invalid_pause_deadline",
+                "until must be in the future",
+            ));
+        }
+        (None, until) => until,
+        _ => None,
+    };
+    Ok(Json(ApiResponse::ok(
+        pause_tracking(&state, pause_until).await?,
+    )))
+}
+
+async fn post_resume_tracking(
+    State(state): State<AgentState>,
+) -> Result<Json<ApiResponse<TrackingStateResponse>>, AppError> {
+    Ok(Json(ApiResponse::ok(resume_tracking(&state).await?)))
+}
+
+async fn post_retention(
+    State(state): State<AgentState>,
+    Json(payload): Json<UpdateRetentionRequest>,
+) -> Result<Json<ApiResponse<UpdateRetentionRequest>>, AppError> {
+    if payload
+        .retention_days
+        .is_some_and(|days| !(30..=3650).contains(&days))
+    {
+        return Err(AppError::bad_request(
+            "invalid_retention_days",
+            "retention_days must be null or between 30 and 3650",
+        ));
+    }
+    let value = payload.retention_days.map(|days| days.to_string());
+    state
+        .store()
+        .set_runtime_setting("retention_days", value.as_deref())
+        .await?;
+    Ok(Json(ApiResponse::ok(payload)))
+}
+
+async fn get_data_export(
+    State(state): State<AgentState>,
+    Query(query): Query<ExportQuery>,
+) -> Result<Response, AppError> {
+    let from = parse_date(&query.from)?;
+    let to = parse_date(&query.to)?;
+    if to < from || (to - from).whole_days() > 3650 {
+        return Err(AppError::bad_request(
+            "invalid_export_range",
+            "export date range must be ordered and no longer than 3650 days",
+        ));
+    }
+    let (bytes, content_type, extension) = match query.format.as_deref().unwrap_or("json") {
+        "json" => (
+            state.store().export_json(from, to).await?,
+            "application/json; charset=utf-8",
+            "json",
+        ),
+        "csv" => (
+            state.store().export_csv_archive(from, to).await?,
+            "application/zip",
+            "zip",
+        ),
+        _ => {
+            return Err(AppError::bad_request(
+                "invalid_export_format",
+                "format must be json or csv",
+            ));
+        }
+    };
+    Response::builder()
+        .header(CONTENT_TYPE, content_type)
+        .header(
+            CONTENT_DISPOSITION,
+            format!(
+                "attachment; filename=timeline-{}-{}.{}",
+                query.from, query.to, extension
+            ),
+        )
+        .body(Body::from(bytes))
+        .map_err(|error| AppError::internal(anyhow::anyhow!(error)))
+}
+
+async fn get_data_backup(State(state): State<AgentState>) -> Result<Response, AppError> {
+    let path = state.store().create_online_backup().await?;
+    let result = std::fs::read(&path);
+    let _ = std::fs::remove_file(&path);
+    let bytes = result.map_err(|error| AppError::internal(error.into()))?;
+    Response::builder()
+        .header(CONTENT_TYPE, "application/vnd.sqlite3")
+        .header(
+            CONTENT_DISPOSITION,
+            "attachment; filename=timeline-backup.sqlite",
+        )
+        .body(Body::from(bytes))
+        .map_err(|error| AppError::internal(anyhow::anyhow!(error)))
+}
+
+async fn post_data_delete(
+    State(state): State<AgentState>,
+    Json(payload): Json<DeleteDataRequest>,
+) -> Result<Json<ApiResponse<serde_json::Value>>, AppError> {
+    if payload.all && (payload.from.is_some() || payload.to.is_some()) {
+        return Err(AppError::bad_request(
+            "conflicting_delete_range",
+            "from/to must be omitted when all is true",
+        ));
+    }
+    let from = payload.from.as_deref().map(parse_date).transpose()?;
+    let to = payload.to.as_deref().map(parse_date).transpose()?;
+    if !payload.all && (from.is_none() || to.is_none()) {
+        return Err(AppError::bad_request(
+            "missing_delete_range",
+            "from and to are required unless all is true",
+        ));
+    }
+    let pause_state = state.tracking_pause_state().await;
+    crate::trackers::shutdown_open_segments(&state).await?;
+    state.store().delete_data(from, to, payload.all).await?;
+    if pause_state.0 {
+        pause_tracking(&state, pause_state.2).await?;
+    }
+    Ok(Json(ApiResponse::ok(serde_json::json!({"deleted": true}))))
 }
 
 async fn post_autostart(
@@ -198,6 +455,19 @@ async fn post_update_agent_config(
     next.poll_interval_millis = payload.poll_interval_millis;
     next.health_reminder_enabled = payload.health_reminder_enabled;
     next.health_reminder_threshold_secs = payload.health_reminder_threshold_secs;
+    if payload.health_reminder_work_start.is_some() || payload.health_reminder_work_end.is_some() {
+        next.health_reminder_work_start =
+            normalize_optional_config_time(payload.health_reminder_work_start.as_deref());
+        next.health_reminder_work_end =
+            normalize_optional_config_time(payload.health_reminder_work_end.as_deref());
+    }
+    if payload.health_reminder_quiet_start.is_some() || payload.health_reminder_quiet_end.is_some()
+    {
+        next.health_reminder_quiet_start =
+            normalize_optional_config_time(payload.health_reminder_quiet_start.as_deref());
+        next.health_reminder_quiet_end =
+            normalize_optional_config_time(payload.health_reminder_quiet_end.as_deref());
+    }
     next.record_window_titles = payload.record_window_titles;
     next.record_page_titles = payload.record_page_titles;
     next.ignored_apps = sanitize_list(payload.ignored_apps);
@@ -212,6 +482,7 @@ async fn post_update_agent_config(
 
     next.save_to_path(config_path).map_err(AppError::internal)?;
     state.replace_runtime_config(&next).await;
+    reconcile_runtime_config(&state).await?;
 
     Ok(Json(ApiResponse::ok(UpdateAgentConfigResponse {
         saved: true,
@@ -231,7 +502,28 @@ async fn post_browser_event(
         ));
     }
 
-    let observed_at = payload.observed_at.unwrap_or_else(OffsetDateTime::now_utc);
+    let mut payload = payload;
+    payload.domain = payload
+        .domain
+        .trim()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    payload.page_title = payload.page_title.map(|value| value.trim().to_string());
+    validate_browser_event_payload(&payload)?;
+
+    let received_at = OffsetDateTime::now_utc();
+    let observed_at = normalize_browser_observed_at(payload.observed_at, received_at);
+    if payload
+        .observed_at
+        .is_some_and(|value| value != observed_at)
+    {
+        warn!(
+            reported_at = ?payload.observed_at,
+            normalized_at = ?observed_at,
+            "browser event timestamp exceeded the accepted clock-skew window"
+        );
+    }
+    payload.observed_at = Some(observed_at);
     let ack = sync_browser_event(&state, payload, observed_at).await?;
     Ok(Json(ApiResponse::ok(ack)))
 }
@@ -267,13 +559,17 @@ async fn get_period_summary(
 
 fn parse_or_today(value: Option<&str>, timezone: time::UtcOffset) -> Result<Date, AppError> {
     if let Some(value) = value {
-        let format = parse("[year]-[month]-[day]")
-            .map_err(|error| AppError::internal(anyhow::anyhow!(error)))?;
-        return Date::parse(value, &format)
-            .map_err(|_| AppError::bad_request("invalid_date", "date must use YYYY-MM-DD"));
+        return parse_date(value);
     }
 
     Ok(OffsetDateTime::now_utc().to_offset(timezone).date())
+}
+
+fn parse_date(value: &str) -> Result<Date, AppError> {
+    let format = parse("[year]-[month]-[day]")
+        .map_err(|error| AppError::internal(anyhow::anyhow!(error)))?;
+    Date::parse(value, &format)
+        .map_err(|_| AppError::bad_request("invalid_date", "date must use YYYY-MM-DD"))
 }
 
 fn parse_trend_period(value: Option<&str>) -> Result<TrendPeriod, AppError> {
@@ -404,6 +700,16 @@ async fn frontend_not_built() -> impl IntoResponse {
     )
 }
 
+async fn api_not_found() -> impl IntoResponse {
+    (
+        StatusCode::NOT_FOUND,
+        Json(ApiResponse::<()>::err(
+            "not_found",
+            "the requested API endpoint does not exist",
+        )),
+    )
+}
+
 async fn build_monitor_statuses(state: &AgentState) -> Vec<AgentMonitorStatus> {
     let now = OffsetDateTime::now_utc();
     let runtime_config = state.runtime_config_snapshot().await;
@@ -417,23 +723,23 @@ async fn build_monitor_statuses(state: &AgentState) -> Vec<AgentMonitorStatus> {
         monitor_status(
             "focus_tracker",
             "前台窗口监视器",
-            telemetry.focus_last_seen,
+            &telemetry.focus,
             poll_window,
             now,
             "轮询前台应用和窗口标题",
         ),
         monitor_status(
             "presence_tracker",
-            "Presence 监视器",
-            telemetry.presence_last_seen,
+            "使用状态监视器",
+            &telemetry.presence,
             poll_window,
             now,
-            "轮询 active / idle / locked 状态",
+            "轮询活跃、空闲、锁定和暂停状态",
         ),
         monitor_status(
             "browser_bridge",
             "浏览器桥接",
-            telemetry.browser_last_seen,
+            &telemetry.browser,
             browser_window,
             now,
             "接收浏览器扩展上报的活动标签页",
@@ -451,7 +757,10 @@ async fn build_monitor_statuses(state: &AgentState) -> Vec<AgentMonitorStatus> {
             } else {
                 "托盘已在配置中关闭".to_string()
             },
-            last_seen: telemetry.tray_last_seen,
+            last_seen: telemetry.tray.last_seen,
+            last_error: telemetry.tray.last_error,
+            consecutive_failures: telemetry.tray.consecutive_failures,
+            restart_count: telemetry.tray.restart_count,
         },
     ]
 }
@@ -459,15 +768,22 @@ async fn build_monitor_statuses(state: &AgentState) -> Vec<AgentMonitorStatus> {
 fn monitor_status(
     key: &str,
     label: &str,
-    last_seen: Option<OffsetDateTime>,
+    probe: &MonitorProbe,
     freshness: Duration,
     now: OffsetDateTime,
     detail: &str,
 ) -> AgentMonitorStatus {
-    let status = match last_seen {
-        Some(seen_at) if now - seen_at <= freshness => "online",
-        Some(_) => "stale",
-        None => "waiting",
+    let status = match (
+        probe.recovering,
+        probe.consecutive_failures,
+        probe.last_seen,
+    ) {
+        (true, _, _) => "recovering",
+        (_, failures, _) if failures >= 3 => "offline",
+        (_, failures, _) if failures > 0 => "degraded",
+        (_, _, Some(seen_at)) if now - seen_at <= freshness => "online",
+        (_, _, Some(_)) => "offline",
+        (_, _, None) => "recovering",
     };
 
     AgentMonitorStatus {
@@ -475,7 +791,10 @@ fn monitor_status(
         label: label.to_string(),
         status: status.to_string(),
         detail: detail.to_string(),
-        last_seen,
+        last_seen: probe.last_seen,
+        last_error: probe.last_error.clone(),
+        consecutive_failures: probe.consecutive_failures,
+        restart_count: probe.restart_count,
     }
 }
 
@@ -501,7 +820,117 @@ fn validate_agent_config_payload(payload: &UpdateAgentConfigRequest) -> Result<(
         ));
     }
 
+    validate_health_reminder_time_window(
+        "health_reminder_work_hours",
+        payload.health_reminder_work_start.as_deref(),
+        payload.health_reminder_work_end.as_deref(),
+    )?;
+    validate_health_reminder_time_window(
+        "health_reminder_quiet_hours",
+        payload.health_reminder_quiet_start.as_deref(),
+        payload.health_reminder_quiet_end.as_deref(),
+    )?;
+
+    validate_ignored_list("ignored_apps", &payload.ignored_apps)?;
+    validate_ignored_list("ignored_domains", &payload.ignored_domains)?;
+
     Ok(())
+}
+
+fn validate_health_reminder_time_window(
+    field: &'static str,
+    start: Option<&str>,
+    end: Option<&str>,
+) -> Result<(), AppError> {
+    validate_optional_time_window(field, start, end).map_err(|error| {
+        AppError::bad_request("invalid_health_reminder_time_window", error.to_string())
+    })?;
+    Ok(())
+}
+
+fn normalize_optional_config_time(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn validate_ignored_list(field: &'static str, items: &[String]) -> Result<(), AppError> {
+    if items.len() > MAX_IGNORED_ITEMS {
+        return Err(AppError::bad_request(
+            "too_many_ignored_items",
+            format!("{field} must contain at most {MAX_IGNORED_ITEMS} items"),
+        ));
+    }
+    if items
+        .iter()
+        .any(|item| item.trim().chars().count() > MAX_IGNORED_ITEM_LENGTH)
+    {
+        return Err(AppError::bad_request(
+            "ignored_item_too_long",
+            format!("{field} items must be at most {MAX_IGNORED_ITEM_LENGTH} characters"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_browser_event_payload(payload: &BrowserEventPayload) -> Result<(), AppError> {
+    if payload.domain.is_empty()
+        || payload.domain.len() > MAX_BROWSER_DOMAIN_LENGTH
+        || !is_valid_hostname(&payload.domain)
+    {
+        return Err(AppError::bad_request(
+            "invalid_browser_domain",
+            "domain must be a valid hostname with at most 253 characters",
+        ));
+    }
+    if payload
+        .page_title
+        .as_ref()
+        .is_some_and(|title| title.chars().count() > MAX_BROWSER_TITLE_LENGTH)
+    {
+        return Err(AppError::bad_request(
+            "browser_title_too_long",
+            "page_title must be at most 512 characters",
+        ));
+    }
+    if payload.browser_window_id <= 0 || payload.tab_id <= 0 {
+        return Err(AppError::bad_request(
+            "invalid_browser_tab",
+            "browser_window_id and tab_id must be positive",
+        ));
+    }
+    Ok(())
+}
+
+fn is_valid_hostname(value: &str) -> bool {
+    if value.parse::<IpAddr>().is_ok() {
+        return true;
+    }
+    value.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    })
+}
+
+fn normalize_browser_observed_at(
+    observed_at: Option<OffsetDateTime>,
+    received_at: OffsetDateTime,
+) -> OffsetDateTime {
+    match observed_at {
+        Some(value)
+            if value >= received_at - BROWSER_EVENT_MAX_PAST_SKEW
+                && value <= received_at + BROWSER_EVENT_MAX_FUTURE_SKEW =>
+        {
+            value
+        }
+        _ => received_at,
+    }
 }
 
 fn sanitize_list(items: Vec<String>) -> Vec<String> {
@@ -575,9 +1004,13 @@ impl IntoResponse for AppError {
 mod tests {
     use super::{
         EXTENSION_HEADER, EXTENSION_HEADER_VALUE, has_extension_header, is_allowed_browser_origin,
-        is_allowed_loopback_origin,
+        is_allowed_loopback_origin, is_valid_hostname, monitor_status,
+        normalize_browser_observed_at, validate_browser_event_payload,
     };
+    use crate::state::MonitorProbe;
     use axum::http::{HeaderMap, HeaderValue};
+    use common::BrowserEventPayload;
+    use time::{Duration, OffsetDateTime};
 
     #[test]
     fn allows_loopback_http_origins() {
@@ -637,5 +1070,69 @@ mod tests {
         headers.insert(EXTENSION_HEADER, HeaderValue::from_static("wrong"));
 
         assert!(!has_extension_header(&headers));
+    }
+
+    #[test]
+    fn validates_browser_hostnames_and_payload_bounds() {
+        assert!(is_valid_hostname("docs.rs"));
+        assert!(is_valid_hostname("127.0.0.1"));
+        assert!(!is_valid_hostname("bad host.example"));
+        assert!(!is_valid_hostname("-bad.example"));
+
+        let payload = BrowserEventPayload {
+            domain: "docs.rs".to_string(),
+            page_title: Some("SQLx".to_string()),
+            browser_window_id: 1,
+            tab_id: 2,
+            observed_at: None,
+        };
+        assert!(validate_browser_event_payload(&payload).is_ok());
+
+        let invalid = BrowserEventPayload {
+            tab_id: 0,
+            ..payload
+        };
+        assert!(validate_browser_event_payload(&invalid).is_err());
+    }
+
+    #[test]
+    fn clamps_browser_timestamps_outside_clock_skew_window() {
+        let received_at = OffsetDateTime::from_unix_timestamp(1_700_000_000).expect("time");
+        assert_eq!(
+            normalize_browser_observed_at(Some(received_at - Duration::minutes(3)), received_at,),
+            received_at
+        );
+        assert_eq!(
+            normalize_browser_observed_at(Some(received_at - Duration::seconds(30)), received_at),
+            received_at - Duration::seconds(30)
+        );
+    }
+
+    #[test]
+    fn monitor_status_distinguishes_degraded_recovering_and_offline() {
+        let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).expect("time");
+        let freshness = Duration::seconds(4);
+        let mut probe = MonitorProbe {
+            last_seen: Some(now),
+            consecutive_failures: 1,
+            ..MonitorProbe::default()
+        };
+        assert_eq!(
+            monitor_status("focus", "前台", &probe, freshness, now, "detail").status,
+            "degraded"
+        );
+
+        probe.recovering = true;
+        assert_eq!(
+            monitor_status("focus", "前台", &probe, freshness, now, "detail").status,
+            "recovering"
+        );
+
+        probe.recovering = false;
+        probe.consecutive_failures = 3;
+        assert_eq!(
+            monitor_status("focus", "前台", &probe, freshness, now, "detail").status,
+            "offline"
+        );
     }
 }

@@ -10,6 +10,7 @@ mod db;
 mod http;
 mod state;
 mod system;
+mod timezone;
 mod trackers;
 mod windows;
 
@@ -23,6 +24,7 @@ use std::env;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use time::{OffsetDateTime, UtcOffset};
+use timezone::TimeZoneContext;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -40,7 +42,7 @@ async fn main() -> Result<()> {
 
 async fn run_backend_mode(backend_args: &[String]) -> Result<()> {
     if let Some(streak_secs) = parse_debug_trigger_health_reminder(backend_args) {
-        system::show_break_reminder(streak_secs.max(60));
+        system::show_break_reminder_preview(streak_secs.max(60));
         std::thread::sleep(std::time::Duration::from_millis(1_200));
         return Ok(());
     }
@@ -49,10 +51,19 @@ async fn run_backend_mode(backend_args: &[String]) -> Result<()> {
     let (config, config_path) = AppConfig::load(explicit_config_path)?;
     init_tracing(config.debug);
 
-    let timezone = UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC);
     let started_at = OffsetDateTime::now_utc();
+    let timezone_context = TimeZoneContext::current_windows().unwrap_or_else(|error| {
+        warn!(
+            ?error,
+            "failed to load Windows dynamic time zone; using fixed current offset"
+        );
+        TimeZoneContext::Fixed(UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC))
+    });
+    let timezone = timezone_context
+        .offset_at(started_at)
+        .unwrap_or_else(|_| UtcOffset::current_local_offset().unwrap_or(UtcOffset::UTC));
     let _lock = acquire_instance_lock(&config.lockfile_path)?;
-    let store = AgentStore::connect(&config, timezone).await?;
+    let store = AgentStore::connect(&config, timezone_context).await?;
     store.restore_unclosed_segments().await?;
     store.ensure_daily_rollups().await?;
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -65,6 +76,67 @@ async fn run_backend_mode(backend_args: &[String]) -> Result<()> {
         timezone,
         shutdown_tx,
     );
+    let active_rollup_store = state.store().clone();
+    tokio::spawn(async move {
+        if let Err(error) = active_rollup_store.ensure_active_rollups().await {
+            warn!(?error, "failed to rebuild active rollups");
+        }
+    });
+    let timezone_state = state.clone();
+    tokio::spawn(async move {
+        let mut shutdown = timezone_state.subscribe_shutdown();
+        loop {
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(5 * 60)) => {
+                    match timezone_state.store().refresh_windows_timezone() {
+                        Ok(true) => {
+                            info!(timezone = %timezone_state.store().timezone_id(), "Windows time zone changed; rebuilding daily rollups");
+                            if let Err(error) = timezone_state.store().rebuild_daily_rollups().await {
+                                warn!(?error, "failed to rebuild daily rollups after time-zone change");
+                                continue;
+                            }
+                            if let Err(error) = timezone_state.store().rebuild_active_rollups().await {
+                                warn!(?error, "failed to rebuild active rollups after time-zone change");
+                            }
+                        }
+                        Ok(false) => {}
+                        Err(error) => warn!(?error, "failed to refresh Windows time zone"),
+                    }
+                }
+                _ = shutdown.changed() => return,
+            }
+        }
+    });
+    trackers::restore_tracking_pause(&state).await?;
+    let maintenance_state = state.clone();
+    tokio::spawn(async move {
+        loop {
+            match maintenance_state
+                .store()
+                .runtime_setting("retention_days")
+                .await
+            {
+                Ok(Some(value)) => match value.parse::<u32>() {
+                    Ok(days) => {
+                        if let Err(error) = maintenance_state.store().apply_retention(days).await {
+                            warn!(?error, "retention maintenance failed");
+                        }
+                    }
+                    Err(error) => warn!(?error, "invalid persisted retention_days"),
+                },
+                Ok(None) => {}
+                Err(error) => warn!(?error, "failed to read retention settings"),
+            }
+            let mut shutdown = maintenance_state.subscribe_shutdown();
+            tokio::select! {
+                _ = tokio::time::sleep(std::time::Duration::from_secs(24 * 60 * 60)) => {},
+                _ = shutdown.changed() => return,
+            }
+        }
+    });
+    if let Err(error) = system::reconcile_autostart_command(&state) {
+        warn!(?error, "failed to reconcile autostart command");
+    }
     if let Err(error) = system::ensure_toast_shortcut_registered(&state) {
         warn!(
             ?error,
@@ -81,10 +153,14 @@ async fn run_backend_mode(backend_args: &[String]) -> Result<()> {
         .with_context(|| format!("failed to bind {}", config.listen_addr))?;
 
     info!(listen_addr = %config.listen_addr, "timeline agent started");
-    axum::serve(listener, build_router(state))
-        .with_graceful_shutdown(shutdown_signal(shutdown_rx))
-        .await
-        .context("axum server failed")?;
+    let serve_result = axum::serve(listener, build_router(state.clone()))
+        .with_graceful_shutdown(shutdown_signal(state.clone(), shutdown_rx))
+        .await;
+    state.request_shutdown();
+    if let Err(error) = trackers::shutdown_open_segments(&state).await {
+        warn!(?error, "failed to close open segments during shutdown");
+    }
+    serve_result.context("axum server failed")?;
 
     Ok(())
 }
@@ -152,11 +228,12 @@ fn acquire_instance_lock(lockfile_path: &PathBuf) -> Result<std::fs::File> {
     Ok(file)
 }
 
-async fn shutdown_signal(mut shutdown_rx: tokio::sync::watch::Receiver<bool>) {
+async fn shutdown_signal(state: AgentState, mut shutdown_rx: tokio::sync::watch::Receiver<bool>) {
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {},
         _ = shutdown_rx.changed() => {},
     }
 
+    state.request_shutdown();
     info!("shutdown signal received");
 }

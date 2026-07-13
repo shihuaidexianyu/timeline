@@ -10,15 +10,8 @@ import type {
 const DAY_SECONDS = 24 * 60 * 60
 const MERGE_GAP_SECONDS = 60
 
-function isDarkTheme(): boolean {
-  if (typeof document === 'undefined') {
-    return false
-  }
-  return document.documentElement.getAttribute('data-theme') === 'dark'
-}
-
-function getAppPresetColors(): string[] {
-  if (isDarkTheme()) {
+function getAppPresetColors(theme: 'light' | 'dark'): string[] {
+  if (theme === 'dark') {
     return [
       '#5AB4D8',
       '#5AD4C2',
@@ -42,8 +35,8 @@ function getAppPresetColors(): string[] {
   ]
 }
 
-function getDomainPresetColors(): string[] {
-  if (isDarkTheme()) {
+function getDomainPresetColors(theme: 'light' | 'dark'): string[] {
+  if (theme === 'dark') {
     return [
       '#8AB8F0',
       '#5AD4C2',
@@ -141,6 +134,7 @@ type TimelineTimeContext = {
 export function buildDashboardModel(
   timeline: TimelineDayResponse,
   activeOnly: boolean,
+  theme: 'light' | 'dark' = 'light',
 ): DashboardModel {
   const timeContext = {
     date: timeline.date,
@@ -152,14 +146,18 @@ export function buildDashboardModel(
     activeOnly ? activeIntervals : null,
     timeContext,
   )
-  const focusSegmentsWithColor = assignDistinctColors(focusSegments, 'app')
+  const focusSegmentsWithColor = assignDistinctColors(focusSegments, 'app', theme)
   const browserSegments = toBrowserChartSegments(
     timeline.browser_segments,
     activeOnly ? activeIntervals : null,
     timeContext,
   )
-  const browserSegmentsWithColor = assignDistinctColors(browserSegments, 'domain')
-  const presenceSegments = toPresenceChartSegments(timeline.presence_segments, timeContext)
+  const browserSegmentsWithColor = assignDistinctColors(browserSegments, 'domain', theme)
+  const presenceSegments = toPresenceChartSegments(
+    timeline.presence_segments,
+    timeContext,
+    theme,
+  )
 
   return {
     focusSegments: focusSegmentsWithColor,
@@ -327,6 +325,7 @@ function toBrowserChartSegments(
 function toPresenceChartSegments(
   segments: PresenceSegment[],
   timeContext: TimelineTimeContext,
+  theme: 'light' | 'dark',
 ) {
   const results: ChartSegment[] = []
 
@@ -345,7 +344,7 @@ function toPresenceChartSegments(
       startSec: range.startSec,
       endSec: range.endSec,
       durationSec: range.endSec - range.startSec,
-      color: presenceColor(segment.state),
+      color: presenceColor(segment.state, theme),
     })
   }
 
@@ -551,6 +550,7 @@ function sumDurations(segments: ChartSegment[]) {
 function assignDistinctColors(
   segments: ChartSegment[],
   namespace: 'app' | 'domain',
+  theme: 'light' | 'dark',
 ) {
   if (segments.length === 0) {
     return segments
@@ -571,7 +571,7 @@ function assignDistinctColors(
     })
     .map(([key]) => key)
 
-  const palette = buildDistinctPalette(orderedKeys.length, namespace)
+  const palette = buildDistinctPalette(orderedKeys.length, namespace, theme)
   const colorByKey = new Map(
     orderedKeys.map((key, index) => [key, palette[index] ?? palette[palette.length - 1]]),
   )
@@ -582,9 +582,13 @@ function assignDistinctColors(
   }))
 }
 
-function buildDistinctPalette(count: number, namespace: 'app' | 'domain') {
+function buildDistinctPalette(
+  count: number,
+  namespace: 'app' | 'domain',
+  theme: 'light' | 'dark',
+) {
   const preset =
-    namespace === 'app' ? getAppPresetColors() : getDomainPresetColors()
+    namespace === 'app' ? getAppPresetColors(theme) : getDomainPresetColors(theme)
 
   if (count <= preset.length) {
     return preset.slice(0, count)
@@ -611,16 +615,22 @@ function presenceLabel(state: PresenceSegment['state']) {
   if (state === 'idle') {
     return '空闲'
   }
+  if (state === 'paused') {
+    return '已暂停'
+  }
   return '锁定'
 }
 
-function presenceColor(state: PresenceSegment['state']) {
-  const dark = isDarkTheme()
+function presenceColor(state: PresenceSegment['state'], theme: 'light' | 'dark') {
+  const dark = theme === 'dark'
   if (state === 'active') {
     return dark ? '#4ad4a3' : '#3fb68a'
   }
   if (state === 'idle') {
     return dark ? '#8e98a6' : '#7d8795'
+  }
+  if (state === 'paused') {
+    return dark ? '#e0a060' : '#c97b4c'
   }
   return dark ? '#6d7582' : '#9aa3af'
 }

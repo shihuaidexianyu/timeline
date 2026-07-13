@@ -1,5 +1,6 @@
 [package]
 name = "timeline"
+version.workspace = true
 edition.workspace = true
 license.workspace = true
 
@@ -19,22 +20,26 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tao = "0.34"
 tray-icon = "0.21.3"
-winrt-notification = "0.5.1"
 winreg = "0.55.0"
 windows = { version = "0.62.2", features = [
+  "Data_Xml_Dom",
+  "Foundation",
   "Win32_Foundation",
+  "Win32_Storage_FileSystem",
   "Win32_System_Com",
   "Win32_System_Com_StructuredStorage",
   "Win32_System_RemoteDesktop",
   "Win32_Security",
   "Win32_System_StationsAndDesktops",
   "Win32_System_SystemInformation",
+  "Win32_System_Time",
   "Win32_System_Threading",
   "Win32_System_Variant",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_Shell",
   "Win32_UI_Shell_PropertiesSystem",
   "Win32_UI_WindowsAndMessaging",
+  "UI_Notifications",
 ] }
 
 [build-dependencies]

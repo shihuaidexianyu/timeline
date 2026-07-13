@@ -28,7 +28,7 @@
 - 本地 SQLite 持久化（`focus_segments`、`browser_segments`、`presence_segments`）
 - 聚合统计接口（应用/域名/专注）
 - 本地 Web UI 时间线与报表
-- 系统托盘与开机自启动开关
+- 系统托盘与开机自启动开关；托盘可显示采集状态并暂停 15 分钟、1 小时、到明天或手动恢复
 - 连续活跃提醒（可配置）
 - 配置驱动的忽略列表（应用名、域名）
 
@@ -98,6 +98,8 @@ npm run dev
 - `poll_interval_millis`：后台轮询间隔
 - `health_reminder_enabled`：是否开启连续活跃提醒
 - `health_reminder_threshold_secs`：提醒触发阈值
+- `health_reminder_work_start` / `health_reminder_work_end`：可选工作时段，本地 `HH:MM`
+- `health_reminder_quiet_start` / `health_reminder_quiet_end`：可选静默时段，支持跨午夜
 - `tray_enabled`：是否启用托盘
 - `record_window_titles`：是否记录窗口标题
 - `record_page_titles`：是否记录页面标题

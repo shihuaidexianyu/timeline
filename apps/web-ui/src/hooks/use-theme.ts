@@ -39,6 +39,7 @@ function applyTheme(mode: ThemeMode) {
 
 export function useTheme() {
   const [theme, setThemeState] = useState<ThemeMode>(() => getStoredTheme())
+  const [systemIsDark, setSystemIsDark] = useState(() => getSystemIsDark())
 
   useEffect(() => {
     applyTheme(theme)
@@ -47,6 +48,7 @@ export function useTheme() {
   useEffect(() => {
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
     const handler = () => {
+      setSystemIsDark(mq.matches)
       if (theme === 'system') {
         applyTheme('system')
       }
@@ -60,5 +62,7 @@ export function useTheme() {
     setThemeState(next)
   }
 
-  return { theme, setTheme }
+  const resolvedTheme: 'light' | 'dark' =
+    theme === 'dark' || (theme === 'system' && systemIsDark) ? 'dark' : 'light'
+  return { theme, resolvedTheme, setTheme }
 }

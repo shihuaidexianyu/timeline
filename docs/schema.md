@@ -28,7 +28,7 @@
 
 ## `presence_segments`
 
-- `state`
+- `state`：`active` / `idle` / `locked` / `paused`
 - `started_at`
 - `ended_at`
 - `last_seen_at`：最后一次真实观测到该状态仍然有效的时间
@@ -39,7 +39,7 @@
 - `payload_json`
 - `observed_at`
 
-`raw_events` 启动后持续 capped 在最近 50,000 行以内，只用于本地调试。
+`raw_events` 启动后持续限制在最近 50,000 行以内，只用于本地调试。`debug=false` 时 `payload_json` 不保存完整采集载荷。
 
 ## `daily_app_usage`
 
@@ -71,7 +71,7 @@
 按本地日期预聚合设备状态时长。
 
 - `date`
-- `state`：`active` / `idle` / `locked`
+- `state`：`active` / `idle` / `locked` / `paused`
 - `seconds`
 - `segment_count`
 - `updated_at`
@@ -80,7 +80,19 @@
 
 ## `rollup_metadata`
 
-记录预聚合数据版本。服务启动时如果发现 `daily_rollup_version` 缺失或过期，会从原始 segment 表重建日汇总。
+记录原始日汇总版本、活跃交集算法版本和 Windows 时区 ID。当前原始汇总版本与活跃算法版本均为 `2`；版本或时区 ID 变化会触发重建。
+
+## `daily_active_app_usage` / `daily_active_domain_usage`
+
+只累计应用/域名区间与 `presence=active` 区间的交集。字段与对应原始日汇总基本一致；新版 UI 默认使用这里的时长，原始 `daily_*_usage` 继续保留兼容口径。
+
+## `rollup_rebuild_jobs`
+
+记录活跃汇总重建的 `pending/running/ready/failed` 状态、完成天数、总天数、下一日期与最近错误。每个日期的活跃应用/域名重建和进度推进在同一事务中提交；中断或失败后保留已经完成的日期，下一次启动从 `next_date` 续跑。HTTP 启动不等待活跃汇总重建完成。
+
+## `runtime_settings`
+
+保存暂停截止时间、数据保留天数和最后备份时间等非敏感运行设置。
 
 ## `schema_migrations`
 
@@ -98,3 +110,4 @@
 4. `add_performance_indexes`
 5. `add_overlap_lookup_indexes`
 6. `create_daily_rollups`
+7. `create_active_rollups_and_runtime_settings`

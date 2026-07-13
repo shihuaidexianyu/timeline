@@ -2,7 +2,9 @@ param(
     [ValidateSet('release')]
     [string]$Profile = 'release',
     [switch]$SkipBuild,
-    [string]$InnoSetupCompiler
+    [switch]$Clean,
+    [string]$InnoSetupCompiler,
+    [string]$SignToolCommand = $env:TIMELINE_SIGNTOOL_COMMAND
 )
 
 $ErrorActionPreference = 'Stop'
@@ -101,6 +103,12 @@ $installSourceDir = Join-Path $stageRoot 'app'
 $installerScript = Join-Path $repoRoot 'installer\timeline.iss'
 $outputRoot = Join-Path $repoRoot 'target\installer\output'
 $setupPath = Join-Path $outputRoot 'timeline-setup.exe'
+$cargoManifest = Get-Content -LiteralPath (Join-Path $repoRoot 'Cargo.toml') -Raw
+$versionMatch = [regex]::Match($cargoManifest, '(?ms)^\[workspace\.package\].*?^version\s*=\s*"([^"]+)"')
+if (-not $versionMatch.Success) {
+    throw 'Unable to read [workspace.package].version from Cargo.toml.'
+}
+$appVersion = $versionMatch.Groups[1].Value
 
 if (-not $SkipBuild) {
     Require-Command -Name 'cargo' | Out-Null
@@ -112,12 +120,14 @@ if (-not $SkipBuild) {
     Remove-PathIfExists -Path (Join-Path $webUiDir 'node_modules\.vite-temp') -AllowedRoot $repoRoot
     Remove-PathIfExists -Path (Join-Path $webUiDir 'node_modules\.tmp') -AllowedRoot $repoRoot
 
-    Push-Location $repoRoot
-    try {
-        & cargo clean
-    }
-    finally {
-        Pop-Location
+    if ($Clean) {
+        Push-Location $repoRoot
+        try {
+            & cargo clean
+        }
+        finally {
+            Pop-Location
+        }
     }
 
     Write-Host 'Building web-ui...' -ForegroundColor Cyan
@@ -161,25 +171,16 @@ New-Item -ItemType Directory -Path $webUiStage, $extensionStage, $configStage, $
 
 Copy-Item -LiteralPath $agentBinary -Destination (Join-Path $installSourceDir 'timeline.exe') -Force
 Copy-DirectoryContents -Source $webUiDist -Destination $webUiStage
-Copy-DirectoryContents -Source $extensionDir -Destination $extensionStage
-Copy-Item -LiteralPath (Join-Path $repoRoot 'config\timeline.example.toml') -Destination (Join-Path $configStage 'timeline.example.toml') -Force
-
-$defaultConfig = @'
-database_path = "../data/timeline.sqlite"
-lockfile_path = "../data/timeline.lock"
-listen_addr = "127.0.0.1:46215"
-web_ui_url = "http://127.0.0.1:46215/#/stats"
-idle_threshold_secs = 300
-poll_interval_millis = 1000
-debug = false
-tray_enabled = true
-record_window_titles = true
-record_page_titles = true
-ignored_apps = []
-ignored_domains = []
-'@
-
-Set-Content -Path (Join-Path $configStage 'timeline.toml') -Value $defaultConfig -Encoding UTF8
+$extensionRuntimeFiles = Get-ChildItem -LiteralPath $extensionDir -File | Where-Object {
+    $_.Name -eq 'manifest.json' -or $_.Extension -in @('.js', '.html', '.css')
+}
+foreach ($extensionFile in $extensionRuntimeFiles) {
+    Copy-Item -LiteralPath $extensionFile.FullName -Destination $extensionStage -Force
+}
+Copy-DirectoryContents -Source (Join-Path $extensionDir 'icons') -Destination (Join-Path $extensionStage 'icons')
+$configTemplate = Join-Path $repoRoot 'config\timeline.example.toml'
+Copy-Item -LiteralPath $configTemplate -Destination (Join-Path $configStage 'timeline.example.toml') -Force
+Copy-Item -LiteralPath $configTemplate -Destination (Join-Path $configStage 'timeline.toml') -Force
 
 if (-not (Test-Path -LiteralPath (Join-Path $installSourceDir 'timeline.exe') -PathType Leaf)) {
     throw "Installer stage is missing timeline.exe under $installSourceDir"
@@ -193,10 +194,17 @@ New-Item -ItemType Directory -Path $outputRoot -Force | Out-Null
 Remove-Item -LiteralPath $setupPath -Force -ErrorAction SilentlyContinue
 
 Write-Host "Building installer with Inno Setup: $setupPath" -ForegroundColor Cyan
-& $iscc `
-    "/DSourceDir=$installSourceDir" `
-    "/DOutputDir=$outputRoot" `
-    $installerScript
+$isccArguments = @(
+    "/DSourceDir=$installSourceDir",
+    "/DOutputDir=$outputRoot",
+    "/DAppVersion=$appVersion"
+)
+if (-not [string]::IsNullOrWhiteSpace($SignToolCommand)) {
+    $isccArguments += '/DEnableSigning=1'
+    $isccArguments += "/Ssigntool=$SignToolCommand"
+}
+$isccArguments += $installerScript
+& $iscc @isccArguments
 
 if ($LASTEXITCODE -ne 0) {
     throw "Inno Setup compiler failed with exit code $LASTEXITCODE."

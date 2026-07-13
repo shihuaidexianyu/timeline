@@ -4,7 +4,7 @@
  * follow custom local ports without hardcoded coupling.
  */
 
-if (['127.0.0.1', 'localhost'].includes(window.location.hostname)) {
+if (['127.0.0.1', 'localhost', '[::1]'].includes(window.location.hostname)) {
   chrome.runtime.sendMessage({
     type: 'timeline-discover-agent',
     origin: window.location.origin,

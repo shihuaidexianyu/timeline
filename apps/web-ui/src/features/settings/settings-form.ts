@@ -6,6 +6,12 @@ export type SettingsFormValues = {
   pollIntervalMillis: number
   healthReminderEnabled: boolean
   healthReminderThresholdSecs: number
+  healthReminderWorkHoursEnabled: boolean
+  healthReminderWorkStart: string
+  healthReminderWorkEnd: string
+  healthReminderQuietHoursEnabled: boolean
+  healthReminderQuietStart: string
+  healthReminderQuietEnd: string
   recordWindowTitles: boolean
   recordPageTitles: boolean
   ignoredAppsText: string
@@ -26,6 +32,16 @@ export function settingsToFormValues(settings: AgentSettingsResponse): SettingsF
     )
       ? settings.health_reminder_threshold_secs
       : 3000,
+    healthReminderWorkHoursEnabled: Boolean(
+      settings.health_reminder_work_start && settings.health_reminder_work_end,
+    ),
+    healthReminderWorkStart: settings.health_reminder_work_start ?? '09:00',
+    healthReminderWorkEnd: settings.health_reminder_work_end ?? '18:00',
+    healthReminderQuietHoursEnabled: Boolean(
+      settings.health_reminder_quiet_start && settings.health_reminder_quiet_end,
+    ),
+    healthReminderQuietStart: settings.health_reminder_quiet_start ?? '22:00',
+    healthReminderQuietEnd: settings.health_reminder_quiet_end ?? '08:00',
     recordWindowTitles: Boolean(settings.record_window_titles),
     recordPageTitles: Boolean(settings.record_page_titles),
     ignoredAppsText: Array.isArray(settings.ignored_apps)
@@ -49,6 +65,18 @@ export function formValuesToUpdatePayload(
       300,
       21600,
     ),
+    health_reminder_work_start: values.healthReminderWorkHoursEnabled
+      ? values.healthReminderWorkStart
+      : '',
+    health_reminder_work_end: values.healthReminderWorkHoursEnabled
+      ? values.healthReminderWorkEnd
+      : '',
+    health_reminder_quiet_start: values.healthReminderQuietHoursEnabled
+      ? values.healthReminderQuietStart
+      : '',
+    health_reminder_quiet_end: values.healthReminderQuietHoursEnabled
+      ? values.healthReminderQuietEnd
+      : '',
     record_window_titles: values.recordWindowTitles,
     record_page_titles: values.recordPageTitles,
     ignored_apps: parseConfigList(values.ignoredAppsText),
@@ -62,9 +90,28 @@ export function settingsFormKey(settings: AgentSettingsResponse) {
     settings.poll_interval_millis,
     settings.health_reminder_enabled,
     settings.health_reminder_threshold_secs,
+    settings.health_reminder_work_start,
+    settings.health_reminder_work_end,
+    settings.health_reminder_quiet_start,
+    settings.health_reminder_quiet_end,
     settings.record_window_titles,
     settings.record_page_titles,
     settings.ignored_apps.join(','),
     settings.ignored_domains.join(','),
   ].join('|')
+}
+
+export function appendConfigListItem(value: string, item: string) {
+  const normalized = item.trim()
+  if (!normalized) return value
+  const existing = parseConfigList(value)
+  if (configListIncludes(value, normalized)) {
+    return value
+  }
+  return [...existing, normalized].join('\n')
+}
+
+export function configListIncludes(value: string, item: string) {
+  const normalized = item.trim().toLocaleLowerCase()
+  return parseConfigList(value).some((entry) => entry.toLocaleLowerCase() === normalized)
 }

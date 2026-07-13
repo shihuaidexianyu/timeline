@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { PointerEvent as ReactPointerEvent } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import type { ChartSegment } from '../lib/chart-model'
 import { formatDuration } from '../lib/chart-model'
 
@@ -191,6 +191,23 @@ export function TimelineClock(props: {
         setIsDragging(true)
     }
 
+    function handleEndpointKey(event: ReactKeyboardEvent<SVGCircleElement>, endpoint: 'start' | 'end') {
+        const delta = event.key === 'ArrowLeft' || event.key === 'ArrowDown'
+            ? -300
+            : event.key === 'ArrowRight' || event.key === 'ArrowUp'
+                ? 300
+                : 0
+        if (delta === 0) return
+        event.preventDefault()
+        if (endpoint === 'start') {
+            const nextStart = clamp(props.viewStartSec + delta, 0, props.viewEndSec - minViewSec)
+            onWindowChange(nextStart, props.viewEndSec)
+        } else {
+            const nextEnd = clamp(props.viewEndSec + delta, props.viewStartSec + minViewSec, DAY_SECONDS)
+            onWindowChange(props.viewStartSec, nextEnd)
+        }
+    }
+
     return (
         <div className={`timeline-clock-card ${isDragging ? 'is-dragging' : ''}`}>
             <div className="timeline-clock-shell">
@@ -287,6 +304,14 @@ export function TimelineClock(props: {
                         r={8}
                         className={`timeline-clock-handle is-window-endpoint ${isAtLimits ? 'is-at-limit' : ''}`}
                         onPointerDown={beginResizeDrag}
+                        role="slider"
+                        tabIndex={0}
+                        aria-label="时间窗口开始"
+                        aria-valuemin={0}
+                        aria-valuemax={DAY_SECONDS}
+                        aria-valuenow={Math.round(props.viewStartSec)}
+                        aria-valuetext={formatClock(props.viewStartSec)}
+                        onKeyDown={(event) => handleEndpointKey(event, 'start')}
                     />
                     <circle
                         cx={windowStartPoint.x}
@@ -301,6 +326,14 @@ export function TimelineClock(props: {
                         r={8}
                         className={`timeline-clock-handle is-window-endpoint ${isAtLimits ? 'is-at-limit' : ''}`}
                         onPointerDown={beginResizeDrag}
+                        role="slider"
+                        tabIndex={0}
+                        aria-label="时间窗口结束"
+                        aria-valuemin={0}
+                        aria-valuemax={DAY_SECONDS}
+                        aria-valuenow={Math.round(props.viewEndSec)}
+                        aria-valuetext={formatClock(props.viewEndSec)}
+                        onKeyDown={(event) => handleEndpointKey(event, 'end')}
                     />
                     <circle
                         cx={windowEndPoint.x}

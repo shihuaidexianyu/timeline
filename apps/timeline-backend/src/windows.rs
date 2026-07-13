@@ -1,13 +1,14 @@
 //! Windows-specific helpers for reading foreground window and user presence.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use common::PresenceState;
 use serde::Serialize;
 use std::ffi::OsString;
 use std::os::windows::ffi::OsStringExt;
 use std::path::Path;
 use std::time::Duration;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND};
+use time::{Date, OffsetDateTime, PrimitiveDateTime, UtcOffset};
+use windows::Win32::Foundation::{CloseHandle, ERROR_NO_MORE_ITEMS, HANDLE, HWND, SYSTEMTIME};
 use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
 use windows::Win32::System::StationsAndDesktops::{
     CloseDesktop, DESKTOP_CONTROL_FLAGS, DESKTOP_READOBJECTS, GetUserObjectInformationW, HDESK,
@@ -17,12 +18,174 @@ use windows::Win32::System::SystemInformation::GetTickCount64;
 use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
+use windows::Win32::System::Time::{
+    DYNAMIC_TIME_ZONE_INFORMATION, EnumDynamicTimeZoneInformation, GetDynamicTimeZoneInformation,
+    SystemTimeToTzSpecificLocalTimeEx, TIME_ZONE_ID_INVALID, TzSpecificLocalTimeToSystemTimeEx,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
     IsWindowVisible,
 };
 use windows::core::PWSTR;
+
+#[derive(Debug, Clone)]
+pub struct WindowsTimeZone {
+    id: String,
+    info: DYNAMIC_TIME_ZONE_INFORMATION,
+}
+
+impl WindowsTimeZone {
+    pub fn current() -> Result<Self> {
+        let mut info = DYNAMIC_TIME_ZONE_INFORMATION::default();
+        let result = unsafe { GetDynamicTimeZoneInformation(&mut info) };
+        if result == TIME_ZONE_ID_INVALID {
+            return Err(anyhow!("GetDynamicTimeZoneInformation failed"));
+        }
+        let id_len = info
+            .TimeZoneKeyName
+            .iter()
+            .position(|unit| *unit == 0)
+            .unwrap_or(info.TimeZoneKeyName.len());
+        let id = String::from_utf16_lossy(&info.TimeZoneKeyName[..id_len]);
+        if id.is_empty() {
+            return Err(anyhow!("Windows returned an empty time-zone ID"));
+        }
+        Self::from_id(&id).or(Ok(Self { id, info }))
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn from_id(id: &str) -> Result<Self> {
+        let mut index = 0;
+        loop {
+            let mut info = DYNAMIC_TIME_ZONE_INFORMATION::default();
+            let result = unsafe { EnumDynamicTimeZoneInformation(index, &mut info) };
+            if result == ERROR_NO_MORE_ITEMS.0 {
+                return Err(anyhow!("unknown Windows time-zone ID: {id}"));
+            }
+            if result != 0 {
+                return Err(anyhow!(
+                    "EnumDynamicTimeZoneInformation failed with code {result}"
+                ));
+            }
+            let name_len = info
+                .TimeZoneKeyName
+                .iter()
+                .position(|unit| *unit == 0)
+                .unwrap_or(info.TimeZoneKeyName.len());
+            let candidate = String::from_utf16_lossy(&info.TimeZoneKeyName[..name_len]);
+            if candidate.eq_ignore_ascii_case(id) {
+                return Ok(Self {
+                    id: candidate,
+                    info,
+                });
+            }
+            index = index.saturating_add(1);
+        }
+    }
+
+    pub fn local_datetime(&self, utc: OffsetDateTime) -> Result<PrimitiveDateTime> {
+        let utc = utc.to_offset(UtcOffset::UTC);
+        let utc_system =
+            system_time_from_primitive(PrimitiveDateTime::new(utc.date(), utc.time()))?;
+        let mut local_system = SYSTEMTIME::default();
+        unsafe {
+            SystemTimeToTzSpecificLocalTimeEx(
+                Some(&self.info as *const _),
+                &utc_system,
+                &mut local_system,
+            )?;
+        }
+        primitive_from_system_time(local_system)
+    }
+
+    pub fn offset_at(&self, utc: OffsetDateTime) -> Result<UtcOffset> {
+        let utc = utc.to_offset(UtcOffset::UTC);
+        let utc_primitive = PrimitiveDateTime::new(utc.date(), utc.time());
+        let seconds = (self.local_datetime(utc)? - utc_primitive).whole_seconds();
+        UtcOffset::from_whole_seconds(
+            i32::try_from(seconds).context("Windows time-zone offset exceeds i32")?,
+        )
+        .context("Windows returned an invalid UTC offset")
+    }
+
+    pub fn day_bounds(&self, date: Date) -> Result<(OffsetDateTime, OffsetDateTime)> {
+        let next_date = date
+            .next_day()
+            .ok_or_else(|| anyhow!("local date overflow"))?;
+        Ok((
+            self.local_midnight_to_utc(date)?,
+            self.local_midnight_to_utc(next_date)?,
+        ))
+    }
+
+    fn local_midnight_to_utc(&self, date: Date) -> Result<OffsetDateTime> {
+        let local_system =
+            system_time_from_primitive(PrimitiveDateTime::new(date, time::Time::MIDNIGHT))?;
+        let mut utc_system = SYSTEMTIME::default();
+        unsafe {
+            TzSpecificLocalTimeToSystemTimeEx(
+                Some(&self.info as *const _),
+                &local_system,
+                &mut utc_system,
+            )?;
+        }
+        Ok(primitive_from_system_time(utc_system)?.assume_utc())
+    }
+}
+
+fn system_time_from_primitive(value: PrimitiveDateTime) -> Result<SYSTEMTIME> {
+    Ok(SYSTEMTIME {
+        wYear: u16::try_from(value.year()).context("year is outside SYSTEMTIME range")?,
+        wMonth: value.month() as u16,
+        wDayOfWeek: 0,
+        wDay: u16::from(value.day()),
+        wHour: u16::from(value.hour()),
+        wMinute: u16::from(value.minute()),
+        wSecond: u16::from(value.second()),
+        wMilliseconds: value.millisecond(),
+    })
+}
+
+fn primitive_from_system_time(value: SYSTEMTIME) -> Result<PrimitiveDateTime> {
+    let month =
+        time::Month::try_from(u8::try_from(value.wMonth).context("SYSTEMTIME month exceeds u8")?)?;
+    let date = Date::from_calendar_date(
+        i32::from(value.wYear),
+        month,
+        u8::try_from(value.wDay).context("SYSTEMTIME day exceeds u8")?,
+    )?;
+    let time = time::Time::from_hms_milli(
+        u8::try_from(value.wHour).context("SYSTEMTIME hour exceeds u8")?,
+        u8::try_from(value.wMinute).context("SYSTEMTIME minute exceeds u8")?,
+        u8::try_from(value.wSecond).context("SYSTEMTIME second exceeds u8")?,
+        value.wMilliseconds,
+    )?;
+    Ok(PrimitiveDateTime::new(date, time))
+}
+
+#[cfg(test)]
+mod timezone_tests {
+    use super::WindowsTimeZone;
+    use time::{Date, Month};
+
+    #[test]
+    fn windows_dynamic_timezone_handles_23_and_25_hour_days() {
+        let timezone =
+            WindowsTimeZone::from_id("Pacific Standard Time").expect("load Pacific Standard Time");
+        let spring = Date::from_calendar_date(2026, Month::March, 8).expect("spring date");
+        let fall = Date::from_calendar_date(2026, Month::November, 1).expect("fall date");
+        let (spring_start, spring_end) = timezone.day_bounds(spring).expect("spring bounds");
+        let (fall_start, fall_end) = timezone.day_bounds(fall).expect("fall bounds");
+
+        assert_eq!((spring_end - spring_start).whole_hours(), 23);
+        assert_eq!((fall_end - fall_start).whole_hours(), 25);
+        assert_eq!(timezone.id(), "Pacific Standard Time");
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ForegroundWindowSnapshot {

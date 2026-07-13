@@ -8,6 +8,13 @@ export function AppShell(props: {
   serviceError: string | null
   lastUpdatedAt: string | null
   onPageChange: (page: AppPage) => void
+  onPreviousDate: () => void
+  onNextDate: () => void
+  onToday: () => void
+  onDateChange: (date: string) => void
+  showPrivacyIntro: boolean
+  onDismissPrivacyIntro: () => void
+  onOpenPrivacySettings: () => void
   children: ReactNode
 }) {
   const pageInfo = pageMeta(props.page)
@@ -16,7 +23,7 @@ export function AppShell(props: {
     <main className="app-shell app-layout">
       <aside className="sidebar-shell">
         <div className="sidebar-brand">
-          <h1>TimeLine</h1>
+          <strong>TimeLine</strong>
         </div>
 
         <nav className="sidebar-nav" aria-label="页面">
@@ -49,20 +56,45 @@ export function AppShell(props: {
         <header className="page-header">
           <div>
             <p className="eyebrow">{pageInfo.kicker}</p>
-            <h2 className="page-title">{pageInfo.title}</h2>
+            <h1 className="page-title">{pageInfo.title}</h1>
             <p className="hero-text">{pageInfo.description}</p>
           </div>
           <div className="activity-meta">
-            <span>
-              <strong>日期</strong>
-              {props.selectedDate}
-            </span>
+            <div className="date-navigation" aria-label="日期导航">
+              <button type="button" onClick={props.onPreviousDate} aria-label="前一天">‹</button>
+              <input
+                type="date"
+                aria-label="选择日期"
+                value={/^\d{4}-\d{2}-\d{2}$/.test(props.selectedDate) ? props.selectedDate : ''}
+                onChange={(event) => event.target.value && props.onDateChange(event.target.value)}
+              />
+              <button type="button" onClick={props.onToday}>今天</button>
+              <button type="button" onClick={props.onNextDate} aria-label="后一天">›</button>
+            </div>
             <span>
               <strong>时区</strong>
               {props.timezone}
             </span>
           </div>
         </header>
+
+        {props.showPrivacyIntro ? (
+          <section className="privacy-intro" aria-labelledby="privacy-intro-title">
+            <div>
+              <p className="eyebrow">首次使用</p>
+              <h2 id="privacy-intro-title">先确认本地记录范围</h2>
+              <ul>
+                <li><strong>窗口标题</strong>可能包含文件名，默认记录，可随时关闭。</li>
+                <li><strong>页面标题</strong>可能包含网页内容摘要，新安装默认不记录。</li>
+                <li><strong>域名</strong>只保存 hostname，例如 example.com，不保存完整 URL 参数。</li>
+              </ul>
+            </div>
+            <div className="privacy-intro-actions">
+              <button type="button" onClick={props.onOpenPrivacySettings}>查看隐私设置</button>
+              <button type="button" className="is-primary" onClick={props.onDismissPrivacyIntro}>知道了</button>
+            </div>
+          </section>
+        ) : null}
 
         {props.children}
       </section>

@@ -2,10 +2,14 @@ import type {
   AgentSettingsResponse,
   ApiEnvelope,
   AppUsageTrendResponse,
+  DeleteDataRequest,
   DurationStat,
   FocusStats,
+  HealthResponse,
   MonthCalendarResponse,
   PeriodSummaryResponse,
+  PauseTrackingRequest,
+  TrackingStateResponse,
   TimelineDayResponse,
   TrendPeriod,
   UpdateAgentConfigRequest,
@@ -119,6 +123,10 @@ export function getTimeline(date?: string, signal?: AbortSignal) {
   return request<TimelineDayResponse>(`/api/timeline/day${query}`, { signal })
 }
 
+export function getHealth(signal?: AbortSignal) {
+  return request<HealthResponse>('/health', { signal })
+}
+
 export function getAppStats(date: string, signal?: AbortSignal) {
   return request<DurationStat[]>(`/api/stats/apps?date=${date}`, { signal })
 }
@@ -158,12 +166,40 @@ export function getAgentSettings(signal?: AbortSignal) {
       typeof raw.health_reminder_threshold_secs === 'number'
         ? raw.health_reminder_threshold_secs
         : 3000,
+    health_reminder_work_start:
+      typeof raw.health_reminder_work_start === 'string' ? raw.health_reminder_work_start : null,
+    health_reminder_work_end:
+      typeof raw.health_reminder_work_end === 'string' ? raw.health_reminder_work_end : null,
+    health_reminder_quiet_start:
+      typeof raw.health_reminder_quiet_start === 'string' ? raw.health_reminder_quiet_start : null,
+    health_reminder_quiet_end:
+      typeof raw.health_reminder_quiet_end === 'string' ? raw.health_reminder_quiet_end : null,
     record_window_titles:
       typeof raw.record_window_titles === 'boolean' ? raw.record_window_titles : true,
     record_page_titles:
-      typeof raw.record_page_titles === 'boolean' ? raw.record_page_titles : true,
+      typeof raw.record_page_titles === 'boolean' ? raw.record_page_titles : false,
     ignored_apps: Array.isArray(raw.ignored_apps) ? raw.ignored_apps : [],
     ignored_domains: Array.isArray(raw.ignored_domains) ? raw.ignored_domains : [],
+    recent_apps: Array.isArray(raw.recent_apps) ? raw.recent_apps : [],
+    recent_domains: Array.isArray(raw.recent_domains) ? raw.recent_domains : [],
+    tracking_paused: Boolean(raw.tracking_paused),
+    paused_since: raw.paused_since ?? null,
+    pause_until: raw.pause_until ?? null,
+    retention_days: typeof raw.retention_days === 'number' ? raw.retention_days : null,
+    database_size_bytes:
+      typeof raw.database_size_bytes === 'number' ? raw.database_size_bytes : 0,
+    earliest_recorded_date: raw.earliest_recorded_date ?? null,
+    last_backup_at: typeof raw.last_backup_at === 'string' ? raw.last_backup_at : null,
+    version: raw.version ?? '未知',
+    schema_version: typeof raw.schema_version === 'number' ? raw.schema_version : 0,
+    active_rollup_status: raw.active_rollup_status ?? {
+      status: 'pending',
+      completed_days: 0,
+      total_days: 0,
+      next_date: null,
+      last_error: null,
+      updated_at: null,
+    },
   }))
 }
 
@@ -180,6 +216,38 @@ export async function updateAgentConfig(payload: UpdateAgentConfigRequest) {
     method: 'POST',
     body: payload,
     fallbackError: '更新本地配置失败',
+  })
+}
+
+export function pauseTracking(payload: PauseTrackingRequest) {
+  return request<TrackingStateResponse>('/api/tracking/pause', {
+    method: 'POST',
+    body: payload,
+    fallbackError: '暂停采集失败',
+  })
+}
+
+export function resumeTracking() {
+  return request<TrackingStateResponse>('/api/tracking/resume', {
+    method: 'POST',
+    body: {},
+    fallbackError: '恢复采集失败',
+  })
+}
+
+export function updateRetention(retentionDays: number | null) {
+  return request<{ retention_days: number | null }>('/api/data/retention', {
+    method: 'POST',
+    body: { retention_days: retentionDays },
+    fallbackError: '更新数据保留策略失败',
+  })
+}
+
+export function deleteData(payload: DeleteDataRequest) {
+  return request<{ deleted: boolean }>('/api/data/delete', {
+    method: 'POST',
+    body: payload,
+    fallbackError: '删除数据失败',
   })
 }
 

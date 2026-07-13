@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Timeline</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header><strong>Timeline</strong><span id="status">读取中</span></header>
+      <dl>
+        <div><dt>本地服务</dt><dd id="agent">--</dd></div>
+        <div><dt>当前域名</dt><dd id="domain">未记录</dd></div>
+        <div><dt>最后成功</dt><dd id="last-success">--</dd></div>
+      </dl>
+      <p id="error" role="status"></p>
+      <button id="tracking" type="button">暂停 15 分钟</button>
+    </main>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
